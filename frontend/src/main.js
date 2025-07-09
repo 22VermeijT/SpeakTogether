@@ -44,11 +44,13 @@ class SpeakTogetherApp {
 
         // Create the main application window
         this.mainWindow = new BrowserWindow({
-            width: 1200,
-            height: 800,
-            minWidth: 800,
+            width: 420,
+            height: 650,
+            minWidth: 400,
             minHeight: 600,
+            maxWidth: 500,
             titleBarStyle: 'hiddenInset',
+            resizable: true,
             webPreferences: {
                 nodeIntegration: false,
                 contextIsolation: true,
@@ -61,8 +63,11 @@ class SpeakTogetherApp {
 
         // Load the app
         if (isDev) {
-            await this.mainWindow.loadURL('http://localhost:5173');
-            this.mainWindow.webContents.openDevTools();
+            // Wait a moment for Vite server to be ready
+            setTimeout(async () => {
+                await this.mainWindow.loadURL('http://localhost:5173');
+                this.mainWindow.webContents.openDevTools();
+            }, 1000);
         } else {
             await this.mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
         }
