@@ -9,7 +9,7 @@ import librosa
 from typing import Dict, Any
 import structlog
 
-from google_adk import LlmAgent, AgentManager
+from ..mock_google_adk import LlmAgent, AgentManager
 
 logger = structlog.get_logger()
 

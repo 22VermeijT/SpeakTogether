@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any
 import structlog
 
-from google_adk import LlmAgent, AgentManager
+from ..mock_google_adk import LlmAgent, AgentManager
 from ..config import settings
 from ..models.response import AudioProcessingResult, AgentStatus, AgentDecision
 from .audio_context_agent import AudioContextAgent
