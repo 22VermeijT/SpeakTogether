@@ -1,0 +1,38 @@
+# Core Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+websockets==12.0
+pydantic==2.5.0
+
+# Google Cloud & ADK
+google-cloud-speech==2.22.0
+google-cloud-translate==3.13.0
+google-cloud-texttospeech==2.16.3
+google-adk==0.1.0
+
+# Audio Processing
+pyaudio==0.2.11
+numpy==1.24.3
+scipy==1.11.4
+librosa==0.10.1
+
+# Async & Streaming
+aiofiles==23.2.1
+asyncio-throttle==1.0.2
+
+# Configuration & Environment
+python-dotenv==1.0.0
+pydantic-settings==2.0.3
+
+# Logging & Monitoring
+structlog==23.2.0
+colorama==0.4.6
+
+# Development & Testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+black==23.11.0
+isort==5.12.0
+
+# Security
+cryptography==41.0.7 

@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SpeakTogether - AI-Powered Real-Time Audio Translation</title>
+    <link rel="stylesheet" href="src/styles/main.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Header -->
+    <header class="app-header">
+        <div class="header-content">
+            <div class="logo-section">
+                <div class="app-logo">🌍</div>
+                <h1 class="app-title">SpeakTogether</h1>
+                <span class="app-subtitle">Breaking language barriers with AI</span>
+            </div>
+            
+            <div class="header-controls">
+                <button id="dashboard-btn" class="btn btn-secondary" title="Open Agent Dashboard">
+                    📊 Dashboard
+                </button>
+                <button id="settings-btn" class="btn btn-secondary" title="Settings">
+                    ⚙️
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        <!-- Status Bar -->
+        <div class="status-bar">
+            <div class="status-item">
+                <span class="status-label">Status:</span>
+                <span id="connection-status" class="status-value status-disconnected">Disconnected</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Session:</span>
+                <span id="session-id" class="status-value">--</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Audio:</span>
+                <span id="audio-status" class="status-value">Permission required</span>
+            </div>
+        </div>
+
+        <!-- Main Controls -->
+        <div class="control-panel">
+            <div class="audio-controls">
+                <button id="start-listening-btn" class="btn btn-primary btn-large" disabled>
+                    🎤 Start Listening
+                </button>
+                <button id="stop-listening-btn" class="btn btn-danger btn-large" style="display: none;">
+                    ⏹️ Stop Listening
+                </button>
+                <button id="upload-file-btn" class="btn btn-secondary">
+                    📁 Upload Audio File
+                </button>
+            </div>
+
+            <div class="language-controls">
+                <div class="language-selector">
+                    <label for="source-language">From:</label>
+                    <select id="source-language" class="form-select">
+                        <option value="auto">Auto-detect</option>
+                        <option value="en">English</option>
+                        <option value="es">Spanish</option>
+                        <option value="fr">French</option>
+                        <option value="de">German</option>
+                        <option value="ja">Japanese</option>
+                        <option value="zh">Chinese</option>
+                    </select>
+                </div>
+                
+                <div class="language-arrow">→</div>
+                
+                <div class="language-selector">
+                    <label for="target-language">To:</label>
+                    <select id="target-language" class="form-select">
+                        <option value="en">English</option>
+                        <option value="es">Spanish</option>
+                        <option value="fr">French</option>
+                        <option value="de">German</option>
+                        <option value="ja">Japanese</option>
+                        <option value="zh">Chinese</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Live Results Display -->
+        <div class="results-container">
+            <!-- Original Transcript -->
+            <div class="result-section">
+                <h3 class="section-title">
+                    📝 Original Transcript
+                    <span id="transcript-language" class="language-badge">--</span>
+                </h3>
+                <div id="transcript-content" class="content-display">
+                    <div class="placeholder-text">
+                        🎤 Start listening to see real-time transcription
+                    </div>
+                </div>
+                <div class="confidence-indicator">
+                    <span>Confidence: </span>
+                    <span id="transcript-confidence" class="confidence-value">--</span>
+                </div>
+            </div>
+
+            <!-- Translated Text -->
+            <div class="result-section">
+                <h3 class="section-title">
+                    🌐 Translation
+                    <span id="translation-language" class="language-badge">--</span>
+                </h3>
+                <div id="translation-content" class="content-display">
+                    <div class="placeholder-text">
+                        🔄 Translation will appear here
+                    </div>
+                </div>
+                <div class="confidence-indicator">
+                    <span>Confidence: </span>
+                    <span id="translation-confidence" class="confidence-value">--</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Agent Status -->
+        <div class="agent-status-container">
+            <h3 class="section-title">🤖 AI Agent Status</h3>
+            <div class="agent-grid">
+                <div class="agent-card" id="audio-context-agent">
+                    <div class="agent-header">
+                        <span class="agent-name">Audio Context</span>
+                        <span class="agent-status">idle</span>
+                    </div>
+                    <div class="agent-decision">Analyzing audio source...</div>
+                    <div class="agent-confidence">Confidence: <span>--</span></div>
+                </div>
+
+                <div class="agent-card" id="translation-strategy-agent">
+                    <div class="agent-header">
+                        <span class="agent-name">Translation Strategy</span>
+                        <span class="agent-status">idle</span>
+                    </div>
+                    <div class="agent-decision">Determining translation style...</div>
+                    <div class="agent-confidence">Confidence: <span>--</span></div>
+                </div>
+
+                <div class="agent-card" id="quality-control-agent">
+                    <div class="agent-header">
+                        <span class="agent-name">Quality Control</span>
+                        <span class="agent-status">idle</span>
+                    </div>
+                    <div class="agent-decision">Monitoring quality...</div>
+                    <div class="agent-confidence">Confidence: <span>--</span></div>
+                </div>
+
+                <div class="agent-card" id="voice-synthesis-agent">
+                    <div class="agent-header">
+                        <span class="agent-name">Voice Synthesis</span>
+                        <span class="agent-status">idle</span>
+                    </div>
+                    <div class="agent-decision">Ready for synthesis...</div>
+                    <div class="agent-confidence">Confidence: <span>--</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Processing Stats -->
+        <div class="stats-container">
+            <div class="stat-item">
+                <span class="stat-label">Processing Time:</span>
+                <span id="processing-time" class="stat-value">--</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Words Processed:</span>
+                <span id="words-processed" class="stat-value">0</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Overall Quality:</span>
+                <span id="overall-quality" class="stat-value">--</span>
+            </div>
+        </div>
+    </main>
+
+    <!-- Modal for File Upload -->
+    <div id="upload-modal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Upload Audio File</h3>
+                <button class="modal-close" id="upload-modal-close">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="upload-area" id="upload-area">
+                    <div class="upload-icon">📁</div>
+                    <p>Drag and drop an audio file here, or click to browse</p>
+                    <input type="file" id="file-input" accept="audio/*,video/*" style="display: none;">
+                    <button id="browse-files-btn" class="btn btn-secondary">Browse Files</button>
+                </div>
+                <div class="upload-progress" id="upload-progress" style="display: none;">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progress-fill"></div>
+                    </div>
+                    <p id="upload-status">Uploading...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+        <div class="footer-content">
+            <span>SpeakTogether v1.0.0 - Powered by Google ADK</span>
+            <div class="footer-links">
+                <button id="about-btn" class="link-btn">About</button>
+                <button id="help-btn" class="link-btn">Help</button>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Scripts -->
+    <script src="src/js/websocket.js"></script>
+    <script src="src/js/audio.js"></script>
+    <script src="src/js/ui.js"></script>
+    <script src="src/js/app.js"></script>
+</body>
+</html> 
