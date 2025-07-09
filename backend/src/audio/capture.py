@@ -1,13 +1,13 @@
 """
 Real-time PyAudio Capture for SpeakTogether
-Handles microphone input with proper threading and buffering
+Handles microphone input and system audio capture with proper threading and buffering
 """
 
 import asyncio
 import threading
 import time
 import queue
-from typing import Optional, Callable, Dict, Any
+from typing import Optional, Callable, Dict, Any, List
 import structlog
 
 try:
@@ -25,7 +25,7 @@ logger = structlog.get_logger()
 class PyAudioCapture:
     """
     Real-time audio capture using PyAudio with asyncio integration
-    Captures microphone input and streams to WebSocket clients
+    Supports both microphone input and system audio capture
     """
     
     def __init__(
@@ -34,17 +34,21 @@ class PyAudioCapture:
         channels: int = 1,
         chunk_size: int = 1024,
         audio_format: int = None,
-        buffer_duration_seconds: float = 1.0
+        buffer_duration_seconds: float = 1.0,
+        audio_source: str = "microphone",  # "microphone" or "system"
+        device_index: Optional[int] = None
     ):
         """
         Initialize PyAudio capture
         
         Args:
             sample_rate: Audio sample rate (16kHz for speech recognition)
-            channels: Number of audio channels (1 for mono)
+            channels: Number of audio channels (1 for mono, 2 for stereo)
             chunk_size: Size of audio chunks to read
             audio_format: PyAudio format (defaults to paInt16)
             buffer_duration_seconds: How long to buffer before sending
+            audio_source: "microphone" or "system" audio capture
+            device_index: Specific device to use (None for default)
         """
         if not PYAUDIO_AVAILABLE:
             raise ImportError(
@@ -56,8 +60,10 @@ class PyAudioCapture:
         self.sample_rate = sample_rate
         self.channels = channels
         self.chunk_size = chunk_size
-        self.audio_format = audio_format or pyaudio.paInt16
+        self.audio_format = audio_format or (pyaudio.paInt16 if PYAUDIO_AVAILABLE else 16)
         self.buffer_duration = buffer_duration_seconds
+        self.audio_source = audio_source
+        self.device_index = device_index
         
         # Calculate buffer size in chunks
         self.buffer_chunks = int(
@@ -90,6 +96,7 @@ class PyAudioCapture:
                    sample_rate=sample_rate,
                    channels=channels,
                    chunk_size=chunk_size,
+                   audio_source=audio_source,
                    buffer_chunks=self.buffer_chunks)
     
     async def initialize(self) -> bool:
@@ -101,11 +108,69 @@ class PyAudioCapture:
             device_info = self._get_device_info()
             logger.info("Audio devices discovered", devices=device_info)
             
+            # Auto-select device if not specified
+            if self.device_index is None:
+                self.device_index = self._get_default_device_index()
+                logger.info("Auto-selected device", 
+                           device_index=self.device_index, 
+                           source=self.audio_source)
+            
             return True
             
         except Exception as e:
             logger.error("Failed to initialize PyAudio", error=str(e))
             return False
+    
+    def _get_default_device_index(self) -> int:
+        """Get default device index based on audio source"""
+        if not PYAUDIO_AVAILABLE or not self.py_audio:
+            return 0
+            
+        try:
+            if self.audio_source == "microphone":
+                return self.py_audio.get_default_input_device_info()['index']
+            elif self.audio_source == "system":
+                # For system audio, we need to find a suitable output device
+                # This is platform-specific and may require special configuration
+                return self._find_system_audio_device()
+            else:
+                return self.py_audio.get_default_input_device_info()['index']
+        except Exception as e:
+            logger.warning("Failed to get default device, using fallback", error=str(e))
+            return 0
+    
+    def _find_system_audio_device(self) -> int:
+        """Find a suitable device for system audio capture"""
+        if not PYAUDIO_AVAILABLE or not self.py_audio:
+            return 0
+            
+        try:
+            # Look for devices that support system audio capture
+            # This is platform-specific implementation
+            device_count = self.py_audio.get_device_count()
+            
+            for i in range(device_count):
+                device_info = self.py_audio.get_device_info_by_index(i)
+                device_name = device_info['name'].lower()
+                
+                # Look for system audio devices (platform-specific)
+                if any(keyword in device_name for keyword in [
+                    'stereo mix', 'what u hear', 'loopback', 'system audio',
+                    'speaker', 'headphone', 'output'
+                ]):
+                    if device_info['maxInputChannels'] > 0:
+                        logger.info("Found system audio device", 
+                                   device=device_info['name'], 
+                                   index=i)
+                        return i
+            
+            # Fallback to default input if no system audio device found
+            logger.warning("No system audio device found, using default input")
+            return self.py_audio.get_default_input_device_info()['index']
+            
+        except Exception as e:
+            logger.error("Error finding system audio device", error=str(e))
+            return 0
     
     def set_audio_callback(self, callback: Callable[[bytes, Dict[str, Any]], None]):
         """Set callback function for audio data"""
@@ -122,12 +187,28 @@ class PyAudioCapture:
                 return False
         
         try:
+            # Get device info for validation
+            device_info = self.py_audio.get_device_info_by_index(self.device_index)
+            logger.info("Starting capture on device", 
+                       device=device_info['name'],
+                       index=self.device_index,
+                       source=self.audio_source)
+            
+            # Adjust channels based on device capabilities
+            max_channels = device_info['maxInputChannels']
+            if self.channels > max_channels:
+                logger.warning("Reducing channels to device maximum", 
+                              requested=self.channels, 
+                              maximum=max_channels)
+                self.channels = max_channels
+            
             # Open audio stream
             self.stream = self.py_audio.open(
                 format=self.audio_format,
                 channels=self.channels,
                 rate=self.sample_rate,
                 input=True,
+                input_device_index=self.device_index,
                 frames_per_buffer=self.chunk_size,
                 stream_callback=self._audio_callback,
                 start=False
@@ -145,14 +226,16 @@ class PyAudioCapture:
             self.capture_thread = threading.Thread(
                 target=self._capture_loop,
                 daemon=True,
-                name="PyAudioCapture"
+                name=f"PyAudioCapture-{self.audio_source}"
             )
             self.capture_thread.start()
             
             # Start the stream
             self.stream.start_stream()
             
-            logger.info("Audio capture started successfully")
+            logger.info("Audio capture started successfully", 
+                       source=self.audio_source,
+                       device=device_info['name'])
             return True
             
         except Exception as e:
@@ -302,29 +385,87 @@ class PyAudioCapture:
     
     def _get_device_info(self) -> Dict[str, Any]:
         """Get information about available audio devices"""
+        devices = {
+            'input_devices': [],
+            'output_devices': [],
+            'system_audio_available': False
+        }
+        
+        if not self.py_audio:
+            return devices
+        
         try:
             device_count = self.py_audio.get_device_count()
-            devices = []
             
             for i in range(device_count):
                 device_info = self.py_audio.get_device_info_by_index(i)
-                if device_info['maxInputChannels'] > 0:  # Input device
-                    devices.append({
-                        'index': i,
-                        'name': device_info['name'],
-                        'channels': device_info['maxInputChannels'],
-                        'sample_rate': int(device_info['defaultSampleRate'])
-                    })
+                
+                device_data = {
+                    'index': i,
+                    'name': device_info['name'],
+                    'max_input_channels': device_info['maxInputChannels'],
+                    'max_output_channels': device_info['maxOutputChannels'],
+                    'default_sample_rate': device_info['defaultSampleRate'],
+                    'host_api': device_info['hostApi']
+                }
+                
+                # Categorize devices
+                if device_info['maxInputChannels'] > 0:
+                    devices['input_devices'].append(device_data)
+                    
+                    # Check if this might be a system audio device
+                    device_name = device_info['name'].lower()
+                    if any(keyword in device_name for keyword in [
+                        'stereo mix', 'what u hear', 'loopback', 'system audio'
+                    ]):
+                        devices['system_audio_available'] = True
+                
+                if device_info['maxOutputChannels'] > 0:
+                    devices['output_devices'].append(device_data)
             
-            return {
-                'default_device': self.py_audio.get_default_input_device_info(),
-                'available_devices': devices,
-                'total_devices': device_count
-            }
+            # Add default device indicators
+            try:
+                default_input = self.py_audio.get_default_input_device_info()
+                default_output = self.py_audio.get_default_output_device_info()
+                
+                devices['default_input_index'] = default_input['index']
+                devices['default_output_index'] = default_output['index']
+                
+            except Exception as e:
+                logger.warning("Could not get default devices", error=str(e))
+            
+            return devices
             
         except Exception as e:
             logger.error("Error getting device info", error=str(e))
-            return {'error': str(e)}
+            return devices
+
+    @staticmethod
+    def get_available_audio_sources() -> List[str]:
+        """Get list of available audio sources"""
+        sources = ["microphone"]
+        
+        # Check if system audio is available (platform-specific)
+        try:
+            temp_audio = pyaudio.PyAudio()
+            device_count = temp_audio.get_device_count()
+            
+            for i in range(device_count):
+                device_info = temp_audio.get_device_info_by_index(i)
+                device_name = device_info['name'].lower()
+                
+                if any(keyword in device_name for keyword in [
+                    'stereo mix', 'what u hear', 'loopback', 'system audio'
+                ]):
+                    sources.append("system")
+                    break
+            
+            temp_audio.terminate()
+            
+        except Exception as e:
+            logger.warning("Could not check system audio availability", error=str(e))
+        
+        return sources
     
     def get_stats(self) -> Dict[str, Any]:
         """Get capture statistics"""

@@ -77,7 +77,9 @@ class AudioStreamHandler:
                 sample_rate=config['sample_rate'],
                 channels=config['channels'],
                 chunk_size=config['chunk_size'],
-                buffer_duration_seconds=config['buffer_duration']
+                buffer_duration_seconds=config['buffer_duration'],
+                audio_source=config['audio_source'],
+                device_index=config.get('device_index')
             )
             
             # Set up callback for audio data with proper event loop handling
@@ -339,19 +341,33 @@ class AudioStreamHandler:
         logger.info("All audio sessions stopped")
     
     def _create_audio_config(self, custom_config: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Create audio configuration with defaults and overrides"""
-        default_config = {
-            'sample_rate': 16000,      # 16kHz for speech recognition
-            'channels': 1,             # Mono
-            'chunk_size': 1024,        # Audio chunk size
-            'buffer_duration': 1.0,    # Buffer 1 second before sending
-            'audio_format': 'int16'    # 16-bit PCM
+        """Create audio configuration with defaults and custom overrides"""
+        config = {
+            'sample_rate': 16000,
+            'channels': 1,
+            'chunk_size': 1024,
+            'buffer_duration': 1.0,
+            'audio_source': 'microphone',  # Default to microphone
+            'device_index': None,  # Auto-select device
+            'format': 'int16'
         }
         
+        # Apply custom overrides
         if custom_config:
-            default_config.update(custom_config)
+            config.update(custom_config)
         
-        return default_config
+        # Validate audio source
+        if config['audio_source'] not in ['microphone', 'system']:
+            logger.warning("Invalid audio source, falling back to microphone", 
+                         source=config['audio_source'])
+            config['audio_source'] = 'microphone'
+        
+        # Adjust channels for system audio (usually stereo)
+        if config['audio_source'] == 'system' and config['channels'] == 1:
+            config['channels'] = 2  # System audio is typically stereo
+            logger.info("Adjusted channels for system audio", channels=2)
+        
+        return config
     
     async def handle_websocket_message(
         self, 

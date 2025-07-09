@@ -59,12 +59,18 @@ const languages = [
   { code: 'pt', name: 'Portuguese' },
 ]
 
+const audioSources = [
+  { code: 'microphone', name: 'Microphone' },
+  { code: 'system', name: 'System Audio' },
+]
+
 export default function App() {
   // State management
   const [isDarkMode, setIsDarkMode] = useState(false)
   const [isListening, setIsListening] = useState(false)
   const [isConnected, setIsConnected] = useState(false)
   const [isTTSEnabled, setIsTTSEnabled] = useState(false)
+  const [audioSource, setAudioSource] = useState('microphone')
   const [sourceLanguage, setSourceLanguage] = useState('auto')
   const [targetLanguage, setTargetLanguage] = useState('en')
   const [transcription, setTranscription] = useState('')
@@ -76,6 +82,7 @@ export default function App() {
   const [agentData, setAgentData] = useState<AgentData | null>(null)
   const [processingTime, setProcessingTime] = useState('--')
   const [wordsProcessed, setWordsProcessed] = useState(0)
+  const [isTranscribing, setIsTranscribing] = useState(false)
 
   // WebSocket connections
   const [audioSocket, setAudioSocket] = useState<WebSocket | null>(null)
@@ -151,7 +158,7 @@ export default function App() {
                 console.log('Transcription Result:', result)
                 
                 if (result.transcript && result.transcript.trim()) {
-                  setTranscript(result.transcript)
+                  setTranscription(result.transcript)
                   
                   // Show translation if available
                   if (result.translation) {
@@ -228,6 +235,7 @@ export default function App() {
 
     if (isListening) {
       setIsListening(false)
+      setIsTranscribing(false)
       // Stop audio capture by sending message to backend
       if (audioSocket && audioSocket.readyState === WebSocket.OPEN) {
         audioSocket.send(JSON.stringify({
@@ -241,6 +249,7 @@ export default function App() {
       const permission = await window.electronAPI?.requestAudioPermission()
       if (permission?.granted) {
         setIsListening(true)
+        setIsTranscribing(true)
         // Start PyAudio capture by sending message to backend
         if (audioSocket && audioSocket.readyState === WebSocket.OPEN) {
           audioSocket.send(JSON.stringify({
@@ -249,14 +258,17 @@ export default function App() {
             timestamp: Date.now(),
             audio_config: {
               sample_rate: 16000,
-              channels: 1,
+              channels: audioSource === 'system' ? 2 : 1,  // Stereo for system audio
               chunk_size: 1024,
-              buffer_duration: 1.0
+              buffer_duration: 1.0,
+              audio_source: audioSource,
+              source_language: sourceLanguage,
+              target_language: targetLanguage
             }
           }))
         }
       } else {
-        alert('Microphone permission is required for audio capture')
+        alert(`${audioSource === 'system' ? 'System audio' : 'Microphone'} permission is required for audio capture`)
       }
     }
   }
@@ -324,6 +336,23 @@ export default function App() {
                   {isListening ? 'Stop' : 'Start'}
                 </Button>
               </div>
+            </div>
+
+            {/* Audio Source Selection */}
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Audio Source</label>
+              <Select value={audioSource} onValueChange={setAudioSource}>
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {audioSources.map((source) => (
+                    <SelectItem key={source.code} value={source.code}>
+                      {source.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             {/* Language Selection */}
