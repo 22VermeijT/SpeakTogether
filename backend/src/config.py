@@ -5,7 +5,8 @@ Environment-based configuration with validation
 
 import os
 from typing import List
-from pydantic import BaseSettings, validator
+from pydantic import field_validator
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -62,13 +63,15 @@ class Settings(BaseSettings):
     CACHE_TTL: int = 300
     RATE_LIMIT_PER_MINUTE: int = 100
     
-    @validator('CORS_ORIGINS', pre=True)
+    @field_validator('CORS_ORIGINS', mode='before')
+    @classmethod
     def parse_cors_origins(cls, v):
         if isinstance(v, str):
             return [origin.strip() for origin in v.split(',')]
         return v
     
-    @validator('GOOGLE_APPLICATION_CREDENTIALS')
+    @field_validator('GOOGLE_APPLICATION_CREDENTIALS')
+    @classmethod
     def validate_google_credentials(cls, v):
         if v and not os.path.exists(v):
             raise ValueError(f"Google credentials file not found: {v}")

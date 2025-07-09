@@ -8,7 +8,7 @@ import base64
 from typing import Dict, Any, Optional
 import structlog
 
-from google_adk import LlmAgent, AgentManager
+from ..mock_google_adk import LlmAgent, AgentManager
 
 logger = structlog.get_logger()
 
