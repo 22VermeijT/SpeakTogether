@@ -36,6 +36,26 @@ class SpeakTogetherApp {
         ipcMain.handle('minimize-to-tray', () => this.minimizeToTray());
     }
 
+    getAppIcon() {
+        // Return platform-specific icon path
+        const assetsPath = path.join(__dirname, '../assets');
+        
+        if (process.platform === 'darwin') {
+            // Use ICNS format for macOS for better integration
+            const icnsPath = path.join(assetsPath, 'icon.icns');
+            try {
+                if (require('fs').existsSync(icnsPath)) {
+                    return icnsPath;
+                }
+            } catch (e) {
+                console.warn('ICNS file not found, falling back to PNG');
+            }
+        }
+        
+        // Fallback to PNG for all platforms or if ICNS not found
+        return path.join(assetsPath, 'icon.png');
+    }
+
     async createMainWindow() {
         // Request audio permissions on macOS
         if (process.platform === 'darwin') {
@@ -62,7 +82,7 @@ class SpeakTogetherApp {
                 enableRemoteModule: false,
                 preload: path.join(__dirname, 'preload.js')
             },
-            icon: path.join(__dirname, '../assets/icon.png'),
+            icon: this.getAppIcon(),
             show: true // Show immediately to avoid timing issues
         });
 
@@ -113,6 +133,7 @@ class SpeakTogetherApp {
                 enableRemoteModule: false,
                 preload: path.join(__dirname, 'preload.js')
             },
+            icon: this.getAppIcon(),
             title: 'Agent Dashboard - SpeakTogether'
         });
 

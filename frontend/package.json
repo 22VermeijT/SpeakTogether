@@ -69,14 +69,21 @@
       "dist-electron/**/*"
     ],
     "mac": {
+      "icon": "assets/icon.icns",
       "category": "public.app-category.productivity",
       "target": "dmg"
     },
     "win": {
+      "icon": "assets/icon.png",
       "target": "nsis"
     },
     "linux": {
+      "icon": "assets/icon.png",
       "target": "AppImage"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
     }
   },
   "homepage": "https://github.com/speaktogether/app"
