@@ -4,6 +4,7 @@ AI-Powered Real-Time Audio Captions & Translation System
 """
 
 import asyncio
+import json
 import logging
 from contextlib import asynccontextmanager
 from typing import Dict, List
@@ -17,6 +18,7 @@ from fastapi.responses import JSONResponse
 from src.config import settings
 from src.agents.orchestrator import MasterOrchestrator
 from src.websocket.connection_manager import ConnectionManager
+from src.audio.stream_handler import AudioStreamHandler
 from src.api import audio, translation, health
 from src.models.response import ErrorResponse, SuccessResponse
 
@@ -41,6 +43,7 @@ logger = structlog.get_logger()
 
 # Global instances
 connection_manager = ConnectionManager()
+audio_stream_handler = AudioStreamHandler()
 orchestrator = None
 
 @asynccontextmanager
@@ -64,6 +67,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down SpeakTogether backend")
     if orchestrator:
         await orchestrator.shutdown()
+    await audio_stream_handler.cleanup()
 
 # Create FastAPI app
 app = FastAPI(
@@ -94,27 +98,46 @@ async def websocket_audio_stream(websocket: WebSocket, session_id: str):
     await connection_manager.connect(websocket, session_id)
     logger.info("WebSocket connected", session_id=session_id)
     
+    # Create callback function to send messages back to frontend
+    async def websocket_callback(message):
+        """Callback function to send messages from AudioStreamHandler to WebSocket"""
+        await connection_manager.send_to_session(session_id, message)
+    
     try:
         while True:
-            # Receive audio data from frontend
-            data = await websocket.receive_bytes()
+            # Receive JSON messages from frontend
+            data = await websocket.receive_text()
             
-            # Process audio through agent orchestrator
-            if orchestrator:
-                result = await orchestrator.process_audio_stream(
-                    audio_data=data,
-                    session_id=session_id
+            try:
+                # Parse JSON message
+                message = json.loads(data)
+                logger.info("Received WebSocket message", 
+                           session_id=session_id, 
+                           message_type=message.get('type'))
+                
+                # Handle message through AudioStreamHandler
+                await audio_stream_handler.handle_websocket_message(
+                    session_id=session_id,
+                    message=message,
+                    websocket_callback=websocket_callback
                 )
                 
-                # Send processed result back to frontend
-                await connection_manager.send_to_session(session_id, result)
+            except json.JSONDecodeError as e:
+                logger.error("Invalid JSON received", 
+                           session_id=session_id, 
+                           error=str(e))
+                await connection_manager.send_error(session_id, "Invalid JSON message")
             
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected", session_id=session_id)
         connection_manager.disconnect(session_id)
+        # Stop any active audio sessions
+        await audio_stream_handler.stop_audio_session(session_id)
     except Exception as e:
         logger.error("WebSocket error", session_id=session_id, error=str(e))
         await connection_manager.send_error(session_id, str(e))
+        # Stop any active audio sessions
+        await audio_stream_handler.stop_audio_session(session_id)
 
 @app.websocket("/ws/agent-dashboard/{session_id}")
 async def websocket_agent_dashboard(websocket: WebSocket, session_id: str):

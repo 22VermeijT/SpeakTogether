@@ -1,16 +1,20 @@
 """
 Audio Stream Handler for SpeakTogether
-Manages PyAudio capture sessions and WebSocket integration
+Manages PyAudio capture sessions and WebSocket integration with Speech-to-Text
 """
 
 import asyncio
 import json
 import time
-from typing import Dict, Optional, Any
+import os
+import base64
+import requests
+from typing import Dict, Optional, Any, Union, Callable, Awaitable
 import structlog
 import threading
 
 from .capture import PyAudioCapture
+from ..google_cloud_client import GoogleCloudClient
 
 logger = structlog.get_logger()
 
@@ -18,27 +22,188 @@ logger = structlog.get_logger()
 class AudioStreamHandler:
     """
     Manages audio capture sessions for WebSocket clients
-    Integrates PyAudio capture with real-time streaming
+    Integrates PyAudio capture with real-time streaming and Speech-to-Text
     """
     
     def __init__(self):
         """Initialize the audio stream handler"""
         self.active_captures: Dict[str, PyAudioCapture] = {}
         self.session_metadata: Dict[str, Dict[str, Any]] = {}
+        self.google_client: Optional[GoogleCloudClient] = None
+        self.use_rest_api = False
+        self.api_key = None
+        self.audio_buffers: Dict[str, bytes] = {}
+        self.buffer_durations: Dict[str, float] = {}
+        self.target_buffer_duration = 3.0  # Process every 3 seconds
         self.stats = {
             'total_sessions': 0,
             'active_sessions': 0,
             'total_audio_bytes': 0,
-            'total_chunks_processed': 0
+            'total_chunks_processed': 0,
+            'total_transcriptions': 0,
+            'successful_transcriptions': 0
         }
-        self._main_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._main_loop = None
         
-        logger.info("Audio stream handler initialized")
+        # Initialize Speech-to-Text client
+        self._initialize_speech_client()
+        
+        logger.info("Audio stream handler initialized with Speech-to-Text support")
     
+    def _initialize_speech_client(self):
+        """Initialize Google Cloud Speech-to-Text client"""
+        try:
+            # Load environment variables
+            try:
+                from dotenv import load_dotenv
+                load_dotenv()
+                logger.info("✅ Loaded environment variables from .env file")
+            except ImportError:
+                logger.warning("python-dotenv not installed, using system environment variables only")
+            
+            # Get API key or credentials
+            api_key = os.getenv('GOOGLE_API_KEY') or os.getenv('ADK_API_KEY')
+            creds_path = os.getenv('GOOGLE_APPLICATION_CREDENTIALS')
+            
+            if api_key:
+                logger.info("🔑 Using API key for Speech-to-Text", api_key_preview=api_key[:10] + "...")
+                self.use_rest_api = True
+                self.api_key = api_key
+            elif creds_path and os.path.exists(creds_path):
+                logger.info("🔑 Using credentials file for Speech-to-Text", creds_path=creds_path)
+                self.google_client = GoogleCloudClient(credentials_path=creds_path)
+                self.use_rest_api = False
+            else:
+                logger.info("🔑 Using default credentials for Speech-to-Text")
+                self.google_client = GoogleCloudClient()
+                self.use_rest_api = False
+                
+        except Exception as e:
+            logger.error("Failed to initialize Speech-to-Text client", error=str(e))
+            self.use_rest_api = False
+            self.google_client = None
+    
+    async def _transcribe_with_rest_api(self, audio_data: bytes, language_code: str = "en-US"):
+        """Transcribe audio using REST API with API key"""
+        try:
+            # Encode audio data
+            audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+            
+            # Prepare request
+            url = f"https://speech.googleapis.com/v1/speech:recognize?key={self.api_key}"
+            
+            payload = {
+                "config": {
+                    "encoding": "LINEAR16",
+                    "sampleRateHertz": 16000,
+                    "languageCode": language_code,
+                    "enableAutomaticPunctuation": True,
+                    "model": "latest_long"
+                },
+                "audio": {
+                    "content": audio_base64
+                }
+            }
+            
+            logger.info("🔄 Making Speech-to-Text API request", 
+                       audio_size=len(audio_data), 
+                       language=language_code)
+            
+            response = requests.post(url, json=payload)
+            
+            logger.info("📨 Speech-to-Text API response", 
+                       status_code=response.status_code,
+                       response_size=len(response.text))
+            
+            if response.status_code == 200:
+                result = response.json()
+                logger.info("✅ Speech-to-Text API success", response_data=result)
+                
+                if 'results' in result and result['results']:
+                    transcript = result['results'][0]['alternatives'][0]['transcript']
+                    confidence = result['results'][0]['alternatives'][0].get('confidence', 0)
+                    
+                    logger.info("📝 Transcription result", 
+                               transcript=transcript,
+                               confidence=confidence)
+                    
+                    self.stats['successful_transcriptions'] += 1
+                    return transcript, confidence
+                else:
+                    logger.info("🔇 No speech detected in audio")
+                    return None, 0
+            else:
+                logger.error("❌ Speech-to-Text API error", 
+                           status_code=response.status_code,
+                           error=response.text)
+                return None, 0
+                
+        except Exception as e:
+            logger.error("❌ Speech-to-Text transcription error", error=str(e))
+            return None, 0
+    
+    async def _transcribe_with_client(self, audio_data: bytes, language_code: str = "en-US"):
+        """Transcribe audio using Google Cloud client library"""
+        try:
+            if self.google_client is None:
+                logger.error("Google Cloud client not initialized")
+                return None, 0
+                
+            # Initialize client if not already done
+            if not self.google_client.is_initialized:
+                await self.google_client.initialize()
+            
+            # Use the client to transcribe
+            from google.cloud import speech
+            
+            # Configure recognition
+            config = speech.RecognitionConfig(
+                encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+                sample_rate_hertz=16000,
+                language_code=language_code,
+                enable_automatic_punctuation=True,
+                model="latest_long"
+            )
+            
+            audio = speech.RecognitionAudio(content=audio_data)
+            
+            logger.info("🔄 Making Speech-to-Text request via client", 
+                       audio_size=len(audio_data), 
+                       language=language_code)
+            
+            # Perform transcription
+            if self.google_client.speech_client is None:
+                logger.error("Google Cloud speech client not initialized")
+                return None, 0
+                
+            response = self.google_client.speech_client.recognize(config=config, audio=audio)
+            
+            logger.info("📨 Speech-to-Text client response", 
+                       results_count=len(response.results))
+            
+            if response.results:
+                result = response.results[0]
+                transcript = result.alternatives[0].transcript
+                confidence = result.alternatives[0].confidence
+                
+                logger.info("📝 Transcription result", 
+                           transcript=transcript,
+                           confidence=confidence)
+                
+                self.stats['successful_transcriptions'] += 1
+                return transcript, confidence
+            else:
+                logger.info("🔇 No speech detected in audio")
+                return None, 0
+                
+        except Exception as e:
+            logger.error("❌ Speech-to-Text transcription error", error=str(e))
+            return None, 0
+
     async def start_audio_session(
         self, 
         session_id: str, 
-        websocket_callback: callable,
+        websocket_callback,
         audio_config: Dict[str, Any] = None
     ) -> bool:
         """
@@ -71,6 +236,10 @@ class AudioStreamHandler:
             # Create audio config
             config = self._create_audio_config(audio_config)
             print(f"🎤 SESSION DEBUG: Created config: {config}")
+            
+            # Initialize audio buffer for this session
+            self.audio_buffers[session_id] = b""
+            self.buffer_durations[session_id] = 0.0
             
             # Create PyAudio capture instance
             capture = PyAudioCapture(
@@ -149,7 +318,7 @@ class AudioStreamHandler:
                     self.stats['total_sessions'] += 1
                     self.stats['active_sessions'] = len(self.active_captures)
                     
-                    logger.info("Audio session started", 
+                    logger.info("Audio session started with Speech-to-Text", 
                                session_id=session_id,
                                config=config)
                     
@@ -173,7 +342,7 @@ class AudioStreamHandler:
                         session_id=session_id, 
                         error=str(e))
             return False
-    
+
     async def stop_audio_session(self, session_id: str) -> bool:
         """
         Stop audio capture for a session
@@ -196,33 +365,41 @@ class AudioStreamHandler:
             await capture.stop_capture()
             await capture.cleanup()
             
+            # Clean up audio buffers
+            if session_id in self.audio_buffers:
+                del self.audio_buffers[session_id]
+            if session_id in self.buffer_durations:
+                del self.buffer_durations[session_id]
+            
             # Get final stats
             session_duration = time.time() - metadata['started_at']
-            capture_stats = capture.get_stats()
-            
-            # Send session ended notification
-            websocket_callback = metadata['websocket_callback']
-            await websocket_callback({
-                'type': 'audio_session_ended',
+            final_stats = {
                 'session_id': session_id,
                 'duration_seconds': session_duration,
-                'stats': capture_stats,
-                'timestamp': time.time()
-            })
+                'total_chunks': metadata['total_chunks'],
+                'total_bytes': metadata['total_bytes'],
+                'config': metadata['config']
+            }
             
-            # Remove from active sessions
+            # Clean up session data
             del self.active_captures[session_id]
             del self.session_metadata[session_id]
             
             # Update stats
             self.stats['active_sessions'] = len(self.active_captures)
-            self.stats['total_audio_bytes'] += capture_stats['total_bytes']
-            self.stats['total_chunks_processed'] += capture_stats['total_chunks']
             
             logger.info("Audio session stopped", 
                        session_id=session_id,
-                       duration=session_duration,
-                       final_stats=capture_stats)
+                       duration_seconds=session_duration,
+                       total_chunks=metadata['total_chunks'])
+            
+            # Send confirmation to client
+            await metadata['websocket_callback']({
+                'type': 'audio_session_ended',
+                'session_id': session_id,
+                'stats': final_stats,
+                'timestamp': time.time()
+            })
             
             return True
             
@@ -231,16 +408,16 @@ class AudioStreamHandler:
                         session_id=session_id, 
                         error=str(e))
             return False
-    
+
     async def _handle_audio_data(
         self, 
         session_id: str, 
         audio_data: bytes, 
         metrics: Dict[str, Any],
-        websocket_callback: callable
+        websocket_callback
     ):
         """
-        Handle audio data from PyAudio capture
+        Handle audio data from PyAudio capture with Speech-to-Text processing
         
         Args:
             session_id: Session ID
@@ -250,12 +427,82 @@ class AudioStreamHandler:
         """
         try:
             # Update session metadata
+            language_code = "en-US"  # Default
             if session_id in self.session_metadata:
                 metadata = self.session_metadata[session_id]
                 metadata['total_chunks'] += 1
                 metadata['total_bytes'] += len(audio_data)
+                
+                # Get language settings from config
+                config = metadata['config']
+                source_language = config.get('source_language', 'en')
+                target_language = config.get('target_language', 'en')
+                
+                # Convert language codes for Google API
+                if source_language != 'auto':
+                    language_code = f"{source_language}-US" if source_language == 'en' else source_language
             
-            # Create message for WebSocket
+            # Add audio to buffer
+            if session_id not in self.audio_buffers:
+                self.audio_buffers[session_id] = b""
+                self.buffer_durations[session_id] = 0.0
+            
+            self.audio_buffers[session_id] += audio_data
+            self.buffer_durations[session_id] += len(audio_data) / (16000 * 2)  # 16kHz, 2 bytes per sample
+            
+            # Process when we have enough audio
+            if self.buffer_durations[session_id] >= self.target_buffer_duration:
+                logger.info("🎙️ Processing audio buffer for transcription", 
+                           session_id=session_id,
+                           buffer_duration=self.buffer_durations[session_id],
+                           buffer_size=len(self.audio_buffers[session_id]))
+                
+                # Transcribe audio
+                self.stats['total_transcriptions'] += 1
+                
+                if self.use_rest_api and self.api_key:
+                    transcript, confidence = await self._transcribe_with_rest_api(
+                        self.audio_buffers[session_id], 
+                        language_code
+                    )
+                elif self.google_client:
+                    transcript, confidence = await self._transcribe_with_client(
+                        self.audio_buffers[session_id], 
+                        language_code
+                    )
+                else:
+                    logger.error("No Speech-to-Text client available")
+                    transcript, confidence = None, 0
+                
+                # Send transcription result to client
+                if transcript and transcript.strip():
+                    await websocket_callback({
+                        'type': 'transcription_result',
+                        'session_id': session_id,
+                        'data': {
+                            'transcript': transcript,
+                            'confidence': confidence,
+                            'language_detected': language_code.split('-')[0],
+                            'service_type': 'google_speech_to_text',
+                            'processing_time_ms': int(time.time() * 1000),
+                            'audio_duration_seconds': self.buffer_durations[session_id]
+                        },
+                        'timestamp': time.time()
+                    })
+                    
+                    logger.info("📝 Transcription sent to client", 
+                               session_id=session_id,
+                               transcript=transcript,
+                               confidence=confidence)
+                else:
+                    logger.info("🔇 No speech detected in audio buffer", 
+                               session_id=session_id)
+                
+                # Reset buffer
+                self.audio_buffers[session_id] = b""
+                self.buffer_durations[session_id] = 0.0
+            
+            # Create message for WebSocket (for debugging/monitoring)
             message = {
                 'type': 'audio_chunk',
                 'session_id': session_id,
@@ -274,7 +521,7 @@ class AudioStreamHandler:
                 'timestamp': time.time()
             }
             
-            # Send audio data via WebSocket
+            # Send audio data via WebSocket (for monitoring)
             await websocket_callback(message)
             
             # Log audio processing
@@ -287,7 +534,7 @@ class AudioStreamHandler:
             logger.error("Error handling audio data", 
                         session_id=session_id, 
                         error=str(e))
-    
+
     async def get_session_status(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get status information for a session"""
         if session_id not in self.active_captures:
@@ -373,7 +620,7 @@ class AudioStreamHandler:
         self, 
         session_id: str, 
         message: Dict[str, Any],
-        websocket_callback: callable
+        websocket_callback
     ) -> bool:
         """
         Handle WebSocket message for audio control
@@ -430,29 +677,34 @@ class AudioStreamHandler:
                         'timestamp': time.time()
                     })
                     return True
+                else:
+                    return False
             
             else:
-                logger.warning("Unknown audio message type", 
-                              session_id=session_id, 
-                              message_type=message_type)
+                logger.warning("Unknown message type", 
+                             message_type=message_type,
+                             session_id=session_id)
                 return False
-            
+                
         except Exception as e:
             logger.error("Error handling WebSocket message", 
                         session_id=session_id, 
                         error=str(e))
-            
-            # Send error response
-            await websocket_callback({
-                'type': 'error',
-                'session_id': session_id,
-                'message': f"Audio handler error: {str(e)}",
-                'timestamp': time.time()
-            })
-            
             return False
     
     async def cleanup(self):
         """Clean up all resources"""
+        logger.info("Cleaning up audio stream handler")
+        
+        # Stop all active sessions
         await self.stop_all_sessions()
-        logger.info("Audio stream handler cleaned up") 
+        
+        # Clear all buffers
+        self.audio_buffers.clear()
+        self.buffer_durations.clear()
+        
+        # Clean up Google Cloud client
+        if self.google_client:
+            await self.google_client.cleanup()
+        
+        logger.info("Audio stream handler cleanup completed") 
