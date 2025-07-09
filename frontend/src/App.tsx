@@ -221,7 +221,7 @@ export default function App() {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-4">
+      <div className="main-content flex-1 overflow-y-auto scrollbar-thin p-4 space-y-4">
         {/* Main Controls */}
         <Card className="gradient-card">
           <CardHeader className="pb-3">
@@ -348,40 +348,48 @@ export default function App() {
           </CardContent>
         </Card>
 
-        {/* Agent Status */}
-        <Accordion type="single" collapsible className="w-full">
-          <AccordionItem value="agents" className="border rounded-lg px-3">
-            <AccordionTrigger className="text-sm font-medium hover:no-underline">
-              <div className="flex items-center gap-2">
-                <Activity className="w-4 h-4" />
-                AI Agents
-                {agentData && (
-                  <Badge variant="outline" className="ml-2">
-                    {Object.values(agentData.agents).filter(a => a.processing).length} active
-                  </Badge>
-                )}
-              </div>
-            </AccordionTrigger>
-            <AccordionContent className="space-y-2 pt-2">
-              {agentData && Object.entries(agentData.agents).map(([key, agent]) => (
-                <div key={key} className="flex items-center justify-between p-2 rounded-md bg-muted/30">
-                  <div className="flex items-center gap-2">
-                    <div className={cn("w-2 h-2 rounded-full", getAgentStatusColor(agent.status))} />
-                    <span className="text-xs font-medium capitalize">
-                      {key.replace('_', ' ')}
-                    </span>
-                  </div>
-                  <Badge variant="outline" className="text-xs">
-                    {getAgentStatusText(agent)}
-                  </Badge>
+        {/* Agent Status - Enhanced visibility */}
+        <Card className="border-purple-200 dark:border-purple-800">
+          <Accordion type="single" collapsible className="w-full" defaultValue="agents">
+            <AccordionItem value="agents" className="border-0">
+              <AccordionTrigger className="text-sm font-medium hover:no-underline px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-purple-500" />
+                  <span className="text-purple-700 dark:text-purple-300">AI Agents</span>
+                  {agentData && (
+                    <Badge variant="outline" className="ml-2 border-purple-300 text-purple-600">
+                      {Object.values(agentData.agents).filter(a => a.processing).length} active
+                    </Badge>
+                  )}
                 </div>
-              ))}
-            </AccordionContent>
-          </AccordionItem>
-        </Accordion>
+              </AccordionTrigger>
+              <AccordionContent className="space-y-2 px-4 pb-4">
+                {agentData ? (
+                  Object.entries(agentData.agents).map(([key, agent]) => (
+                    <div key={key} className="flex items-center justify-between p-3 rounded-md bg-gradient-to-r from-purple-500/5 to-pink-500/5 border border-purple-200 dark:border-purple-800">
+                      <div className="flex items-center gap-2">
+                        <div className={cn("w-2 h-2 rounded-full", getAgentStatusColor(agent.status))} />
+                        <span className="text-sm font-medium capitalize">
+                          {key.replace('_', ' ')}
+                        </span>
+                      </div>
+                      <Badge variant="outline" className="text-xs">
+                        {getAgentStatusText(agent)}
+                      </Badge>
+                    </div>
+                  ))
+                ) : (
+                  <div className="p-3 rounded-md bg-muted/30 text-center text-sm text-muted-foreground">
+                    No agent data available - start the backend server
+                  </div>
+                )}
+              </AccordionContent>
+            </AccordionItem>
+          </Accordion>
+        </Card>
 
         {/* Stats */}
-        <div className="grid grid-cols-2 gap-2 text-xs">
+        <div className="grid grid-cols-2 gap-2 text-xs mb-4">
           <div className="p-2 rounded-md bg-muted/30">
             <div className="text-muted-foreground">Processing</div>
             <div className="font-medium">{processingTime}</div>

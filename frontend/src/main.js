@@ -46,11 +46,16 @@ class SpeakTogetherApp {
         this.mainWindow = new BrowserWindow({
             width: 420,
             height: 650,
-            minWidth: 400,
-            minHeight: 600,
-            maxWidth: 500,
-            titleBarStyle: 'hiddenInset',
+            minWidth: 350,
+            minHeight: 500,
+            maxWidth: 600,
+            maxHeight: 1000,
+            titleBarStyle: process.platform === 'darwin' ? 'default' : 'default',
             resizable: true,
+            movable: true,
+            minimizable: true,
+            maximizable: true,
+            closable: true,
             webPreferences: {
                 nodeIntegration: false,
                 contextIsolation: true,
@@ -58,7 +63,7 @@ class SpeakTogetherApp {
                 preload: path.join(__dirname, 'preload.js')
             },
             icon: path.join(__dirname, '../assets/icon.png'),
-            show: false // Don't show until ready
+            show: true // Show immediately to avoid timing issues
         });
 
         // Load the app
@@ -67,19 +72,15 @@ class SpeakTogetherApp {
             setTimeout(async () => {
                 await this.mainWindow.loadURL('http://localhost:5173');
                 this.mainWindow.webContents.openDevTools();
+                this.mainWindow.focus();
             }, 1000);
         } else {
             await this.mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
         }
 
-        // Show window when ready
+        // Window is already shown, just ensure it's focused when ready
         this.mainWindow.once('ready-to-show', () => {
-            this.mainWindow.show();
-            
-            // Focus the window on creation
-            if (isDev) {
-                this.mainWindow.focus();
-            }
+            this.mainWindow.focus();
         });
 
         // Handle window closed

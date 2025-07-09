@@ -62,9 +62,19 @@
 
 /* Custom styles for compact window */
 .compact-window {
-  width: 400px;
-  height: 600px;
+  min-width: 350px;
+  min-height: 500px;
+  max-width: 600px;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
+}
+
+/* Ensure main content area can scroll properly */
+.main-content {
+  flex: 1;
+  overflow-y: auto;
+  max-height: calc(100vh - 80px);
 }
 
 /* Purple/Pink gradient backgrounds */
