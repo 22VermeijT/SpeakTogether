@@ -104,16 +104,71 @@ export default function App() {
           }
           
           audioWs.onmessage = (event) => {
-            const data: TranscriptionData = JSON.parse(event.data)
-            if (data.type === 'transcription') {
-              setTranscription(data.text)
-              setConfidence(data.confidence * 100)
-              setDetectedLanguage(sourceLanguage === 'auto' ? 'EN' : sourceLanguage.toUpperCase())
+            try {
+              const data = JSON.parse(event.data)
+              console.log('Audio WebSocket message:', data)
               
-              // Mock translation for demo
-              setTranslation(`Translated: ${data.text}`)
-              setTranslationConfidence(85)
-              setWordsProcessed(data.text.split(' ').length)
+              if (data.type === 'transcription') {
+                setTranscription(data.text)
+                setConfidence(data.confidence * 100)
+                setDetectedLanguage(sourceLanguage === 'auto' ? 'EN' : sourceLanguage.toUpperCase())
+                
+                // Mock translation for demo
+                if (data.text && data.text !== '[Silence]') {
+                  setTranslation(`Translated: ${data.text}`)
+                  setTranslationConfidence(85)
+                  setWordsProcessed(data.text.split(' ').length)
+                }
+              } else if (data.type === 'audio_chunk') {
+                // Handle real audio chunk information
+                const audioData = data.audio_data
+                const audioMetrics = data.audio_metrics
+                
+                console.log(`Audio chunk: ${audioData.size_bytes} bytes, Volume: ${audioMetrics.volume_percent.toFixed(1)}%`)
+                
+                // Update UI based on audio activity
+                if (audioMetrics.volume_percent > 10) {
+                  // Some audio detected - update detected language with volume indicator
+                  const lang = sourceLanguage === 'auto' ? 'EN' : sourceLanguage.toUpperCase()
+                  setDetectedLanguage(`${lang} (${audioMetrics.volume_percent.toFixed(0)}%)`)
+                }
+              } else if (data.type === 'audio_session_started') {
+                console.log('Audio session started:', data.config)
+                setIsListening(true)
+              } else if (data.type === 'audio_session_ended') {
+                console.log('Audio session ended:', data.stats)
+                setIsListening(false)
+              } else if (data.type === 'transcription_result') {
+                // Handle Google Cloud transcription results
+                const result = data.data
+                console.log('Transcription Result:', result)
+                
+                if (result.transcript && result.transcript.trim()) {
+                  setTranscript(result.transcript)
+                  
+                  // Show translation if available
+                  if (result.translation) {
+                    setTranslation(result.translation)
+                    console.log(`Translation (${result.language_detected} → ${targetLanguage}):`, result.translation)
+                  }
+                  
+                  // Update detected language
+                  const lang = result.language_detected || sourceLanguage
+                  const confidence = result.confidence ? `${(result.confidence * 100).toFixed(1)}%` : 'N/A'
+                  setDetectedLanguage(`${lang.toUpperCase()} (${confidence})`)
+                  
+                  // Show service and processing info
+                  console.log(`Service: ${result.service_type || 'unknown'} | Processing: ${result.processing_time_ms || 0}ms`)
+                }
+                
+                setIsTranscribing(false)
+              } else if (data.type === 'error') {
+                console.error('Backend error:', data.message)
+                setIsListening(false)
+                alert(`Audio error: ${data.message}`)
+              }
+            } catch (error) {
+              console.error('Error parsing audio message:', error)
             }
           }
           
@@ -166,15 +221,32 @@ export default function App() {
 
     if (isListening) {
       setIsListening(false)
-      // Stop audio capture
+      // Stop audio capture by sending message to backend
+      if (audioSocket && audioSocket.readyState === WebSocket.OPEN) {
+        audioSocket.send(JSON.stringify({
+          type: 'stop_capture',
+          session_id: sessionId,
+          timestamp: Date.now()
+        }))
+      }
     } else {
       // Request audio permission
       const permission = await window.electronAPI?.requestAudioPermission()
       if (permission?.granted) {
         setIsListening(true)
-        // Start audio capture - send mock data for demo
+        // Start PyAudio capture by sending message to backend
         if (audioSocket && audioSocket.readyState === WebSocket.OPEN) {
-          audioSocket.send(new ArrayBuffer(1024)) // Mock audio data
+          audioSocket.send(JSON.stringify({
+            type: 'start_capture',
+            session_id: sessionId,
+            timestamp: Date.now(),
+            audio_config: {
+              sample_rate: 16000,
+              channels: 1,
+              chunk_size: 1024,
+              buffer_duration: 1.0
+            }
+          }))
         }
       } else {
         alert('Microphone permission is required for audio capture')
