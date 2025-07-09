@@ -1,14 +1,14 @@
 # Core Framework
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
 websockets==12.0
-pydantic==2.5.0
+pydantic>=2.5.0
 
 # Google Cloud & ADK
-google-cloud-speech==2.22.0
-google-cloud-translate==3.13.0
-google-cloud-texttospeech==2.16.3
 google-adk==0.1.0
+google-cloud-speech>=2.30.0
+google-cloud-translate>=3.13.0
+google-cloud-texttospeech>=2.16.3
 
 # Audio Processing
 pyaudio==0.2.11
