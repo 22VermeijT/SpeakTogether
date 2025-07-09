@@ -85,13 +85,20 @@ export default function App() {
   useEffect(() => {
     const initializeApp = async () => {
       try {
-        // Get session ID and backend URL from Electron
-        const sessionId = await window.electronAPI?.getSessionId()
-        const backendUrl = await window.electronAPI?.getBackendUrl()
+        // Get session ID and backend URL from Electron, with fallbacks for browser mode
+        let sessionId = await window.electronAPI?.getSessionId()
+        let backendUrl = await window.electronAPI?.getBackendUrl()
         
-        if (sessionId) {
-          setSessionId(sessionId)
+        // Fallback for browser mode (when Electron APIs aren't available)
+        if (!sessionId) {
+          sessionId = `browser-session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
         }
+        
+        if (!backendUrl) {
+          backendUrl = 'http://localhost:8000'
+        }
+        
+        setSessionId(sessionId)
 
         if (backendUrl) {
           // Connect to audio stream WebSocket
