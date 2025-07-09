@@ -236,24 +236,131 @@ class MasterOrchestrator:
     
     async def _process_speech_to_text(self, audio_data: bytes, decision: Dict, session_id: str) -> Dict:
         """Process audio to text using Google Cloud Speech-to-Text"""
-        # Placeholder for Google Cloud Speech-to-Text integration
-        # In real implementation, this would use the Google Cloud client
-        
-        return {
-            'transcript': "Sample transcript for hackathon demo",
-            'language': 'en-US',
-            'confidence': 0.95
-        }
+        try:
+            # Import the Google Cloud client
+            from ..google_cloud_client import GoogleCloudClient
+            
+            # Initialize client if not already done
+            if not hasattr(self, 'google_client'):
+                self.google_client = GoogleCloudClient()
+                await self.google_client.initialize()
+            
+            # Process speech to text
+            result = await self.google_client.speech_to_text(audio_data)
+            
+            if result['success']:
+                logger.info("Speech-to-text successful", 
+                           session_id=session_id, 
+                           word_count=result.get('word_count', 0),
+                           confidence=result['confidence'])
+            else:
+                logger.warning("Speech-to-text failed", 
+                              session_id=session_id, 
+                              error=result.get('error', 'Unknown error'))
+            
+            return {
+                'transcript': result['transcript'],
+                'language': result['language'],
+                'confidence': result['confidence'],
+                'success': result['success']
+            }
+            
+        except Exception as e:
+            logger.error("Error in speech-to-text processing", 
+                        session_id=session_id, error=str(e))
+            return {
+                'transcript': '',
+                'language': 'en-US',
+                'confidence': 0.0,
+                'success': False,
+                'error': str(e)
+            }
     
     async def _process_translation(self, text: str, strategy: Dict, session_id: str) -> Dict:
-        """Process translation using Google Cloud Translation API"""
-        # Placeholder for Google Cloud Translation integration
-        
-        return {
-            'translation': f"Translated: {text}",
-            'target_language': strategy.get('target_language', 'en'),
-            'translation_confidence': 0.92
-        }
+        """Process translation using Google Cloud Translation API with fallback"""
+        try:
+            # Get target language from strategy
+            target_language = strategy.get('target_language', 'en')
+            source_language = strategy.get('source_language', 'auto')
+            
+            # Try Google Cloud client first
+            try:
+                from ..google_cloud_client import GoogleCloudClient
+                
+                # Initialize client if not already done
+                if not hasattr(self, 'google_client'):
+                    self.google_client = GoogleCloudClient()
+                    await self.google_client.initialize()
+                
+                # Process translation
+                result = await self.google_client.translate_text(
+                    text=text,
+                    target_language=target_language,
+                    source_language=source_language
+                )
+                
+                if result['success']:
+                    logger.info("Translation successful (Google Cloud)", 
+                               session_id=session_id, 
+                               source_lang=result['source_language'],
+                               target_lang=result['target_language'])
+                    return {
+                        'translation': result['translation'],
+                        'target_language': result['target_language'],
+                        'source_language': result['source_language'],
+                        'translation_confidence': result['confidence'],
+                        'success': result['success']
+                    }
+                else:
+                    logger.warning("Google Cloud translation failed, trying API key fallback", 
+                                  session_id=session_id, 
+                                  error=result.get('error', 'Unknown error'))
+                    
+            except Exception as e:
+                logger.warning("Google Cloud client failed, trying API key fallback", 
+                              session_id=session_id, error=str(e))
+            
+            # Fallback to API key method
+            from ..simple_translation import SimpleTranslationClient
+            
+            if not hasattr(self, 'simple_client'):
+                self.simple_client = SimpleTranslationClient()
+            
+            result = await self.simple_client.translate_text(
+                text=text,
+                target_language=target_language,
+                source_language=source_language
+            )
+            
+            if result['success']:
+                logger.info("Translation successful (API key fallback)", 
+                           session_id=session_id, 
+                           source_lang=result['source_language'],
+                           target_lang=result['target_language'])
+            else:
+                logger.warning("All translation methods failed", 
+                              session_id=session_id, 
+                              error=result.get('error', 'Unknown error'))
+            
+            return {
+                'translation': result['translation'],
+                'target_language': result['target_language'],
+                'source_language': result['source_language'],
+                'translation_confidence': result['confidence'],
+                'success': result['success']
+            }
+            
+        except Exception as e:
+            logger.error("Error in translation processing", 
+                        session_id=session_id, error=str(e))
+            return {
+                'translation': text,  # Return original text on error
+                'target_language': strategy.get('target_language', 'en'),
+                'source_language': strategy.get('source_language', 'auto'),
+                'translation_confidence': 0.0,
+                'success': False,
+                'error': str(e)
+            }
     
     def _parse_orchestrator_decision(self, response: str) -> Dict:
         """Parse the orchestrator agent's response into structured decision"""
