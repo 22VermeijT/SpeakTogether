@@ -321,6 +321,102 @@ class GoogleCloudClient:
                         error=str(e))
             return {}
     
+    async def speech_to_text(
+        self, 
+        audio_data: bytes, 
+        language_code: str = "en-US",
+        sample_rate: int = 16000,
+        audio_channel_count: int = 1
+    ) -> Dict[str, Any]:
+        """
+        Convert speech to text using Google Cloud Speech-to-Text API
+        
+        Args:
+            audio_data: Raw audio data in bytes
+            language_code: Language code (e.g., "en-US")
+            sample_rate: Audio sample rate in Hz
+            audio_channel_count: Number of audio channels
+            
+        Returns:
+            Dict containing transcription results
+        """
+        if not self.is_initialized:
+            logger.error("Google Cloud client not initialized")
+            return {
+                'success': False,
+                'error': 'Client not initialized',
+                'transcript': '',
+                'confidence': 0.0
+            }
+        
+        try:
+            # Configure recognition
+            config = speech.RecognitionConfig(
+                encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
+                sample_rate_hertz=sample_rate,
+                language_code=language_code,
+                audio_channel_count=audio_channel_count,
+                enable_automatic_punctuation=True,
+                model="latest_short"
+            )
+            
+            # Create audio object
+            audio = speech.RecognitionAudio(content=audio_data)
+            
+            logger.info("Making Speech-to-Text request", 
+                       audio_size=len(audio_data),
+                       language=language_code,
+                       sample_rate=sample_rate)
+            
+            # Perform the transcription
+            response = self.speech_client.recognize(config=config, audio=audio)
+            
+            # Process response
+            if response.results:
+                # Get the first result with the highest confidence
+                result = response.results[0]
+                alternative = result.alternatives[0]
+                
+                logger.info("Speech-to-Text successful", 
+                           transcript=alternative.transcript,
+                           confidence=alternative.confidence)
+                
+                return {
+                    'success': True,
+                    'transcript': alternative.transcript,
+                    'confidence': alternative.confidence,
+                    'language': language_code,
+                    'service_type': 'google_cloud_speech',
+                    'audio_duration_seconds': len(audio_data) / (sample_rate * audio_channel_count * 2)
+                }
+            else:
+                logger.info("No speech detected in audio")
+                return {
+                    'success': False,
+                    'error': 'No speech detected',
+                    'transcript': '',
+                    'confidence': 0.0,
+                    'language': language_code,
+                    'service_type': 'google_cloud_speech'
+                }
+                
+        except google_exceptions.GoogleAPIError as e:
+            logger.error("Google API error in speech recognition", error=str(e))
+            return {
+                'success': False,
+                'error': f'Google API error: {str(e)}',
+                'transcript': '',
+                'confidence': 0.0
+            }
+        except Exception as e:
+            logger.error("Error in speech recognition", error=str(e))
+            return {
+                'success': False,
+                'error': f'Recognition error: {str(e)}',
+                'transcript': '',
+                'confidence': 0.0
+            }
+
     async def translate_text(
         self, 
         text: str, 

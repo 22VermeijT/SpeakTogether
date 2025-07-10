@@ -164,9 +164,11 @@ class MockOrchestrator:
         }
 
     async def process_with_google_cloud(self, audio_data: bytes, session_id: str) -> Dict[str, Any]:
-        """Process audio using real Google Cloud APIs if available"""
+        """Process audio using Google Cloud Speech-to-Text if available"""
         try:
+            # Check if Google Cloud is available
             if not self.google_cloud_enabled:
+                self.logger.info("Google Cloud disabled, using mock processing", session_id=session_id)
                 return await self.process_audio_mock(audio_data, session_id)
             
             # Import Google Cloud client
@@ -181,7 +183,10 @@ class MockOrchestrator:
             # Process with real Google Cloud Speech-to-Text
             speech_result = await self.google_client.speech_to_text(audio_data)
             
-            if speech_result['success'] and speech_result['transcript'].strip():
+            # Safely check for transcript (handle both success and failure cases)
+            if (speech_result.get('success', False) and 
+                speech_result.get('transcript', '').strip()):
+                
                 # If we have a successful transcription, optionally translate
                 translation_result = None
                 
@@ -197,20 +202,23 @@ class MockOrchestrator:
                 return {
                     "session_id": session_id,
                     "transcript": speech_result['transcript'],
-                    "translation": translation_result['translation'] if translation_result and translation_result['success'] else None,
-                    "confidence": speech_result['confidence'],
-                    "language_detected": speech_result['language'],
+                    "translation": translation_result.get('translation') if translation_result and translation_result.get('success') else None,
+                    "confidence": speech_result.get('confidence', 0.0),
+                    "language_detected": speech_result.get('language', 'en-US'),
                     "processing_time_ms": 0,  # Will be calculated by caller
                     "agent_decisions": {
                         "google_cloud": True,
-                        "speech_success": speech_result['success'],
+                        "speech_success": True,
                         "translation_attempted": translation_result is not None,
-                        "translation_success": translation_result and translation_result['success'] if translation_result else False
+                        "translation_success": translation_result and translation_result.get('success', False) if translation_result else False
                     },
                     "service_type": "google_cloud_real"
                 }
             else:
-                # Fall back to mock if no speech detected
+                # Fall back to mock if no speech detected or Google Cloud failed
+                self.logger.info("Google Cloud returned no transcript, falling back to mock", 
+                               session_id=session_id, 
+                               speech_result=speech_result)
                 return await self.process_audio_mock(audio_data, session_id)
                 
         except Exception as e:
@@ -461,6 +469,38 @@ async def get_audio_sessions():
             message="Audio handler not available",
             details="Orchestrator or audio handler not initialized"
         )
+
+async def get_audio_devices():
+    """Get list of available audio devices"""
+    try:
+        import pyaudio
+        pa = pyaudio.PyAudio()
+        
+        devices = []
+        device_count = pa.get_device_count()
+        
+        for i in range(device_count):
+            try:
+                device_info = pa.get_device_info_by_index(i)
+                devices.append({
+                    'index': i,
+                    'name': device_info['name'],
+                    'max_input_channels': device_info['maxInputChannels'],
+                    'max_output_channels': device_info['maxOutputChannels'],
+                    'default_sample_rate': device_info['defaultSampleRate']
+                })
+            except Exception as e:
+                # Skip devices that can't be queried
+                continue
+        
+        pa.terminate()
+        return devices
+        
+    except ImportError:
+        return []
+    except Exception as e:
+        print(f"Error getting audio devices: {e}")
+        return []
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):

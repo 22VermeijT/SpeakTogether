@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { cn } from '@/lib/utils'
 import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -7,6 +7,8 @@ import { Separator } from '@/components/ui/separator'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { 
   Mic, 
@@ -46,17 +48,202 @@ interface AgentData {
   timestamp: number
 }
 
+// Comprehensive Google Translate supported languages
 const languages = [
-  { code: 'auto', name: 'Auto-detect' },
-  { code: 'en', name: 'English' },
-  { code: 'es', name: 'Spanish' },
-  { code: 'fr', name: 'French' },
-  { code: 'de', name: 'German' },
-  { code: 'ja', name: 'Japanese' },
-  { code: 'zh', name: 'Chinese' },
+  { code: 'ab', name: 'Abkhaz' },
+  { code: 'ace', name: 'Acehnese' },
+  { code: 'ach', name: 'Acholi' },
+  { code: 'af', name: 'Afrikaans' },
+  { code: 'sq', name: 'Albanian' },
+  { code: 'alz', name: 'Alur' },
+  { code: 'am', name: 'Amharic' },
   { code: 'ar', name: 'Arabic' },
+  { code: 'hy', name: 'Armenian' },
+  { code: 'as', name: 'Assamese' },
+  { code: 'awa', name: 'Awadhi' },
+  { code: 'ay', name: 'Aymara' },
+  { code: 'az', name: 'Azerbaijani' },
+  { code: 'ban', name: 'Balinese' },
+  { code: 'bm', name: 'Bambara' },
+  { code: 'ba', name: 'Bashkir' },
+  { code: 'eu', name: 'Basque' },
+  { code: 'btx', name: 'Batak Karo' },
+  { code: 'bts', name: 'Batak Simalungun' },
+  { code: 'bbc', name: 'Batak Toba' },
+  { code: 'be', name: 'Belarusian' },
+  { code: 'bem', name: 'Bemba' },
+  { code: 'bn', name: 'Bengali' },
+  { code: 'bew', name: 'Betawi' },
+  { code: 'bho', name: 'Bhojpuri' },
+  { code: 'bik', name: 'Bikol' },
+  { code: 'bs', name: 'Bosnian' },
+  { code: 'br', name: 'Breton' },
+  { code: 'bg', name: 'Bulgarian' },
+  { code: 'bua', name: 'Buryat' },
+  { code: 'yue', name: 'Cantonese' },
+  { code: 'ca', name: 'Catalan' },
+  { code: 'ceb', name: 'Cebuano' },
+  { code: 'ny', name: 'Chichewa (Nyanja)' },
+  { code: 'zh', name: 'Chinese (Simplified)' },
+  { code: 'zh-CN', name: 'Chinese (Simplified, China)' },
+  { code: 'zh-TW', name: 'Chinese (Traditional)' },
+  { code: 'cv', name: 'Chuvash' },
+  { code: 'co', name: 'Corsican' },
+  { code: 'crh', name: 'Crimean Tatar' },
+  { code: 'hr', name: 'Croatian' },
+  { code: 'cs', name: 'Czech' },
+  { code: 'da', name: 'Danish' },
+  { code: 'din', name: 'Dinka' },
+  { code: 'dv', name: 'Divehi' },
+  { code: 'doi', name: 'Dogri' },
+  { code: 'dov', name: 'Dombe' },
+  { code: 'nl', name: 'Dutch' },
+  { code: 'dz', name: 'Dzongkha' },
+  { code: 'en', name: 'English' },
+  { code: 'eo', name: 'Esperanto' },
+  { code: 'et', name: 'Estonian' },
+  { code: 'ee', name: 'Ewe' },
+  { code: 'fj', name: 'Fijian' },
+  { code: 'fil', name: 'Filipino' },
+  { code: 'fi', name: 'Finnish' },
+  { code: 'fr', name: 'French' },
+  { code: 'fr-CA', name: 'French (Canadian)' },
+  { code: 'fy', name: 'Frisian' },
+  { code: 'ff', name: 'Fulfulde' },
+  { code: 'gaa', name: 'Ga' },
+  { code: 'gl', name: 'Galician' },
+  { code: 'lg', name: 'Ganda (Luganda)' },
+  { code: 'ka', name: 'Georgian' },
+  { code: 'de', name: 'German' },
+  { code: 'el', name: 'Greek' },
+  { code: 'gn', name: 'Guarani' },
+  { code: 'gu', name: 'Gujarati' },
+  { code: 'ht', name: 'Haitian Creole' },
+  { code: 'cnh', name: 'Hakha Chin' },
+  { code: 'ha', name: 'Hausa' },
+  { code: 'haw', name: 'Hawaiian' },
+  { code: 'he', name: 'Hebrew' },
+  { code: 'hil', name: 'Hiligaynon' },
   { code: 'hi', name: 'Hindi' },
+  { code: 'hmn', name: 'Hmong' },
+  { code: 'hu', name: 'Hungarian' },
+  { code: 'hrx', name: 'Hunsrik' },
+  { code: 'is', name: 'Icelandic' },
+  { code: 'ig', name: 'Igbo' },
+  { code: 'ilo', name: 'Iloko' },
+  { code: 'id', name: 'Indonesian' },
+  { code: 'ga', name: 'Irish' },
+  { code: 'it', name: 'Italian' },
+  { code: 'ja', name: 'Japanese' },
+  { code: 'jv', name: 'Javanese' },
+  { code: 'kn', name: 'Kannada' },
+  { code: 'pam', name: 'Kapampangan' },
+  { code: 'kk', name: 'Kazakh' },
+  { code: 'km', name: 'Khmer' },
+  { code: 'cgg', name: 'Kiga' },
+  { code: 'rw', name: 'Kinyarwanda' },
+  { code: 'ktu', name: 'Kituba' },
+  { code: 'gom', name: 'Konkani' },
+  { code: 'ko', name: 'Korean' },
+  { code: 'kri', name: 'Krio' },
+  { code: 'ku', name: 'Kurdish (Kurmanji)' },
+  { code: 'ckb', name: 'Kurdish (Sorani)' },
+  { code: 'ky', name: 'Kyrgyz' },
+  { code: 'lo', name: 'Lao' },
+  { code: 'ltg', name: 'Latgalian' },
+  { code: 'la', name: 'Latin' },
+  { code: 'lv', name: 'Latvian' },
+  { code: 'lij', name: 'Ligurian' },
+  { code: 'li', name: 'Limburgan' },
+  { code: 'ln', name: 'Lingala' },
+  { code: 'lt', name: 'Lithuanian' },
+  { code: 'lmo', name: 'Lombard' },
+  { code: 'luo', name: 'Luo' },
+  { code: 'lb', name: 'Luxembourgish' },
+  { code: 'mk', name: 'Macedonian' },
+  { code: 'mai', name: 'Maithili' },
+  { code: 'mak', name: 'Makassar' },
+  { code: 'mg', name: 'Malagasy' },
+  { code: 'ms', name: 'Malay' },
+  { code: 'ms-Arab', name: 'Malay (Jawi)' },
+  { code: 'ml', name: 'Malayalam' },
+  { code: 'mt', name: 'Maltese' },
+  { code: 'mi', name: 'Maori' },
+  { code: 'mr', name: 'Marathi' },
+  { code: 'chm', name: 'Meadow Mari' },
+  { code: 'mni-Mtei', name: 'Meiteilon (Manipuri)' },
+  { code: 'min', name: 'Minang' },
+  { code: 'lus', name: 'Mizo' },
+  { code: 'mn', name: 'Mongolian' },
+  { code: 'my', name: 'Myanmar (Burmese)' },
+  { code: 'nr', name: 'Ndebele (South)' },
+  { code: 'new', name: 'Nepalbhasa (Newari)' },
+  { code: 'ne', name: 'Nepali' },
+  { code: 'nso', name: 'Northern Sotho (Sepedi)' },
+  { code: 'no', name: 'Norwegian' },
+  { code: 'nus', name: 'Nuer' },
+  { code: 'oc', name: 'Occitan' },
+  { code: 'or', name: 'Odia (Oriya)' },
+  { code: 'om', name: 'Oromo' },
+  { code: 'pag', name: 'Pangasinan' },
+  { code: 'pap', name: 'Papiamento' },
+  { code: 'ps', name: 'Pashto' },
+  { code: 'fa', name: 'Persian' },
+  { code: 'pl', name: 'Polish' },
   { code: 'pt', name: 'Portuguese' },
+  { code: 'pt-BR', name: 'Portuguese (Brazil)' },
+  { code: 'pt-PT', name: 'Portuguese (Portugal)' },
+  { code: 'pa', name: 'Punjabi' },
+  { code: 'pa-Arab', name: 'Punjabi (Shahmukhi)' },
+  { code: 'qu', name: 'Quechua' },
+  { code: 'rom', name: 'Romani' },
+  { code: 'ro', name: 'Romanian' },
+  { code: 'rn', name: 'Rundi' },
+  { code: 'ru', name: 'Russian' },
+  { code: 'sm', name: 'Samoan' },
+  { code: 'sg', name: 'Sango' },
+  { code: 'sa', name: 'Sanskrit' },
+  { code: 'gd', name: 'Scots Gaelic' },
+  { code: 'sr', name: 'Serbian' },
+  { code: 'st', name: 'Sesotho' },
+  { code: 'crs', name: 'Seychellois Creole' },
+  { code: 'shn', name: 'Shan' },
+  { code: 'sn', name: 'Shona' },
+  { code: 'scn', name: 'Sicilian' },
+  { code: 'szl', name: 'Silesian' },
+  { code: 'sd', name: 'Sindhi' },
+  { code: 'si', name: 'Sinhala (Sinhalese)' },
+  { code: 'sk', name: 'Slovak' },
+  { code: 'sl', name: 'Slovenian' },
+  { code: 'so', name: 'Somali' },
+  { code: 'es', name: 'Spanish' },
+  { code: 'su', name: 'Sundanese' },
+  { code: 'sw', name: 'Swahili' },
+  { code: 'ss', name: 'Swati' },
+  { code: 'sv', name: 'Swedish' },
+  { code: 'tg', name: 'Tajik' },
+  { code: 'ta', name: 'Tamil' },
+  { code: 'tt', name: 'Tatar' },
+  { code: 'te', name: 'Telugu' },
+  { code: 'tet', name: 'Tetum' },
+  { code: 'th', name: 'Thai' },
+  { code: 'ti', name: 'Tigrinya' },
+  { code: 'ts', name: 'Tsonga' },
+  { code: 'tn', name: 'Tswana' },
+  { code: 'tr', name: 'Turkish' },
+  { code: 'tk', name: 'Turkmen' },
+  { code: 'ak', name: 'Twi (Akan)' },
+  { code: 'uk', name: 'Ukrainian' },
+  { code: 'ur', name: 'Urdu' },
+  { code: 'ug', name: 'Uyghur' },
+  { code: 'uz', name: 'Uzbek' },
+  { code: 'vi', name: 'Vietnamese' },
+  { code: 'cy', name: 'Welsh' },
+  { code: 'xh', name: 'Xhosa' },
+  { code: 'yi', name: 'Yiddish' },
+  { code: 'yo', name: 'Yoruba' },
+  { code: 'yua', name: 'Yucatec Maya' },
+  { code: 'zu', name: 'Zulu' }
 ]
 
 const audioSources = [
@@ -64,29 +251,296 @@ const audioSources = [
   { code: 'system', name: 'System Audio' },
 ]
 
+// Language Selection Component - Completely isolated from parent state
+const IsolatedLanguageSelect = ({ 
+  value, 
+  onValueChange, 
+  placeholder, 
+  languages: langList,
+  searchPlaceholder = "Search languages...",
+  id
+}: {
+  value: string
+  onValueChange: (value: string) => void
+  placeholder: string
+  languages: Array<{code: string, name: string}>
+  searchPlaceholder?: string
+  id: string
+}) => {
+  const [searchValue, setSearchValue] = useState("")
+  const [debouncedSearchValue, setDebouncedSearchValue] = useState("")
+  const [isOpen, setIsOpen] = useState(false)
+  
+  // Use a ref to track the previous value
+  const prevValue = useRef(value)
+  
+  // Reset search when value changes from outside
+  useEffect(() => {
+    if (value !== prevValue.current) {
+      setSearchValue("")
+      setIsOpen(false)
+      prevValue.current = value
+    }
+  }, [value])
+  
+  // Debounce the search value to prevent excessive filtering
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchValue(searchValue)
+    }, 150)
+    return () => clearTimeout(timer)
+  }, [searchValue])
+  
+  const filteredLanguages = useMemo(() => 
+    langList.filter(lang => 
+      lang.name.toLowerCase().includes(debouncedSearchValue.toLowerCase()) ||
+      lang.code.toLowerCase().includes(debouncedSearchValue.toLowerCase())
+    ).slice(0, 50) // Limit to 50 results for performance
+  , [langList, debouncedSearchValue])
+
+  const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    e.preventDefault()
+    setSearchValue(e.target.value)
+    if (!isOpen) {
+      setIsOpen(true)
+    }
+  }, [isOpen])
+
+  const handleValueChange = useCallback((newValue: string) => {
+    onValueChange(newValue)
+    setSearchValue("")
+    setIsOpen(false)
+  }, [onValueChange])
+
+  const handleInputClick = useCallback(() => {
+    setIsOpen(!isOpen)
+  }, [isOpen])
+
+  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      setIsOpen(false)
+      setSearchValue("")
+    }
+  }, [])
+
+  const selectedLanguage = useMemo(() => 
+    langList.find(lang => lang.code === value)
+  , [langList, value])
+
+  // Click outside to close
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement
+      if (!target.closest(`#${id}`)) {
+        setIsOpen(false)
+      }
+    }
+
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside)
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [isOpen, id])
+
+  return (
+    <div className="space-y-1" id={id}>
+      <div className="relative">
+        <Input
+          placeholder={searchPlaceholder}
+          value={searchValue}
+          onChange={handleSearchChange}
+          onKeyDown={handleKeyDown}
+          onClick={handleInputClick}
+          className="h-7 text-xs cursor-pointer"
+        />
+        {isOpen && (
+          <div className="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border rounded-md shadow-lg max-h-60 overflow-y-auto">
+            {filteredLanguages.map((lang) => (
+              <div
+                key={lang.code}
+                className="px-3 py-2 text-xs hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer flex items-center justify-between"
+                onClick={() => handleValueChange(lang.code)}
+              >
+                <span>{lang.name}</span>
+                <span className="text-muted-foreground ml-2">{lang.code}</span>
+              </div>
+            ))}
+            {filteredLanguages.length === 0 && (
+              <div className="p-3 text-xs text-muted-foreground text-center">
+                No languages found
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="text-xs text-muted-foreground">
+        Selected: {selectedLanguage?.name || 'None'}
+      </div>
+    </div>
+  )
+}
+
+// Simple Language Select with Search - Optimized to prevent re-renders
+const SimpleLanguageSelect = React.memo(({ 
+  value, 
+  onValueChange, 
+  placeholder, 
+  languages: langList,
+  searchPlaceholder = "Search languages..."
+}: {
+  value: string
+  onValueChange: (value: string) => void
+  placeholder: string
+  languages: Array<{code: string, name: string}>
+  searchPlaceholder?: string
+}) => {
+  const [searchValue, setSearchValue] = useState("")
+
+  const filteredLanguages = useMemo(() => 
+    langList.filter(lang => 
+      lang.name.toLowerCase().includes(searchValue.toLowerCase()) ||
+      lang.code.toLowerCase().includes(searchValue.toLowerCase())
+    ).slice(0, 50) // Limit to 50 results for performance
+  , [langList, searchValue])
+
+  const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchValue(e.target.value)
+  }, [])
+
+  return (
+    <div className="space-y-1">
+      <Input
+        placeholder={searchPlaceholder}
+        value={searchValue}
+        onChange={handleSearchChange}
+        className="h-7 text-xs"
+      />
+      <Select value={value} onValueChange={onValueChange}>
+        <SelectTrigger className="h-8 text-xs">
+          <SelectValue placeholder={placeholder} />
+        </SelectTrigger>
+        <SelectContent className="max-h-60">
+          {filteredLanguages.map((lang) => (
+            <SelectItem key={lang.code} value={lang.code}>
+              <div className="flex items-center justify-between w-full">
+                <span>{lang.name}</span>
+                <span className="text-xs text-muted-foreground ml-2">{lang.code}</span>
+              </div>
+            </SelectItem>
+          ))}
+          {filteredLanguages.length === 0 && (
+            <div className="p-2 text-xs text-muted-foreground text-center">
+              No languages found
+            </div>
+          )}
+        </SelectContent>
+      </Select>
+    </div>
+  )
+})
+
 export default function App() {
   // State management
-  const [isDarkMode, setIsDarkMode] = useState(false)
   const [isListening, setIsListening] = useState(false)
   const [isConnected, setIsConnected] = useState(false)
+  const [isDarkMode, setIsDarkMode] = useState(false)
   const [isTTSEnabled, setIsTTSEnabled] = useState(false)
-  const [audioSource, setAudioSource] = useState('microphone')
-  const [sourceLanguage, setSourceLanguage] = useState('auto')
-  const [targetLanguage, setTargetLanguage] = useState('en')
   const [transcription, setTranscription] = useState('')
   const [translation, setTranslation] = useState('')
   const [confidence, setConfidence] = useState(0)
   const [translationConfidence, setTranslationConfidence] = useState(0)
-  const [detectedLanguage, setDetectedLanguage] = useState('--')
-  const [sessionId, setSessionId] = useState<string | null>(null)
-  const [agentData, setAgentData] = useState<AgentData | null>(null)
-  const [processingTime, setProcessingTime] = useState('--')
-  const [wordsProcessed, setWordsProcessed] = useState(0)
   const [isTranscribing, setIsTranscribing] = useState(false)
+  const [detectedLanguage, setDetectedLanguage] = useState('EN')
+  const [sessionId, setSessionId] = useState('')
+  const [agentData, setAgentData] = useState<AgentData | null>(null)
+  const [audioSource, setAudioSource] = useState('microphone')
+  const [sourceLanguage, setSourceLanguage] = useState('en')
+  const [targetLanguage, setTargetLanguage] = useState('en')
+  const [processingTime, setProcessingTime] = useState('0ms')
+  const [wordsProcessed, setWordsProcessed] = useState(0)
 
   // WebSocket connections
   const [audioSocket, setAudioSocket] = useState<WebSocket | null>(null)
   const [dashboardSocket, setDashboardSocket] = useState<WebSocket | null>(null)
+
+  // Add throttling references for UI updates
+  const lastLanguageUpdate = useRef<number>(0)
+  const lastAgentUpdate = useRef<number>(0)
+  const lastTranscriptionUpdate = useRef<number>(0)
+  const LANGUAGE_UPDATE_THROTTLE = 2000 // Only update every 2 seconds
+  const AGENT_UPDATE_THROTTLE = 1000 // Only update every 1 second
+  const TRANSCRIPTION_UPDATE_THROTTLE = 500 // Only update every 0.5 seconds
+
+  // Memoize language change handlers to prevent unnecessary re-renders
+  const handleSourceLanguageChange = useCallback((value: string) => {
+    setSourceLanguage(value)
+    console.log('🔄 Source language changed to:', value)
+    
+    // Send language update to backend if connected and listening
+    if (audioSocket && audioSocket.readyState === WebSocket.OPEN) {
+      try {
+        const message = {
+          type: 'update_language_config',
+          session_id: sessionId,
+          timestamp: Date.now(),
+          language_config: {
+            source_language: value,
+            target_language: targetLanguage
+          }
+        }
+        
+        audioSocket.send(JSON.stringify(message))
+        console.log('📤 Sent source language update:', {
+          source: value,
+          target: targetLanguage,
+          session_id: sessionId
+        })
+      } catch (error) {
+        console.error('❌ Failed to send source language update:', error)
+      }
+    } else {
+      console.log('⚠️ WebSocket not connected, language update will be sent when capture starts')
+    }
+  }, [audioSocket, sessionId, targetLanguage])
+
+  const handleTargetLanguageChange = useCallback((value: string) => {
+    setTargetLanguage(value)
+    console.log('🔄 Target language changed to:', value)
+    
+    // Send language update to backend if connected and listening
+    if (audioSocket && audioSocket.readyState === WebSocket.OPEN) {
+      try {
+        const message = {
+          type: 'update_language_config',
+          session_id: sessionId,
+          timestamp: Date.now(),
+          language_config: {
+            source_language: sourceLanguage,
+            target_language: value
+          }
+        }
+        
+        audioSocket.send(JSON.stringify(message))
+        console.log('📤 Sent target language update:', {
+          source: sourceLanguage,
+          target: value,
+          session_id: sessionId
+        })
+      } catch (error) {
+        console.error('❌ Failed to send target language update:', error)
+      }
+    } else {
+      console.log('⚠️ WebSocket not connected, language update will be sent when capture starts')
+    }
+  }, [audioSocket, sessionId, sourceLanguage])
+
+  // Memoize filtered languages to prevent unnecessary re-computation
+  const targetLanguages = useMemo(() => 
+    languages  // No need to filter anything since auto-detect is removed
+  , [])
 
   // Initialize Electron APIs and WebSocket connections
   useEffect(() => {
@@ -123,15 +577,36 @@ export default function App() {
               console.log('Audio WebSocket message:', data)
               
               if (data.type === 'transcription') {
-                setTranscription(data.text)
-                setConfidence(data.confidence * 100)
-                setDetectedLanguage(sourceLanguage === 'auto' ? 'EN' : sourceLanguage.toUpperCase())
-                
-                // Mock translation for demo
-                if (data.text && data.text !== '[Silence]') {
-                  setTranslation(`Translated: ${data.text}`)
-                  setTranslationConfidence(85)
-                  setWordsProcessed(data.text.split(' ').length)
+                // Throttle transcription updates to prevent frequent re-renders
+                const now = Date.now()
+                if (now - lastTranscriptionUpdate.current > TRANSCRIPTION_UPDATE_THROTTLE) {
+                  if (data.transcript && data.transcript.trim()) {
+                    setTranscription(data.transcript)
+                    setConfidence(data.confidence ? data.confidence * 100 : 0)
+                    
+                    // Show translation if available
+                    if (data.translation && data.translation.text) {
+                      setTranslation(data.translation.text)
+                      setTranslationConfidence(85) // Default confidence for translation
+                      setWordsProcessed(data.transcript.split(' ').length)
+                      console.log(`Translation (${data.translation.source_language} → ${data.translation.target_language}):`, data.translation.text)
+                    } else {
+                      // Clear translation if not available
+                      setTranslation('')
+                      setTranslationConfidence(0)
+                      setWordsProcessed(data.transcript.split(' ').length)
+                    }
+                    
+                    // Update detected language using selected source language
+                    const sourceLang = sourceLanguage.toUpperCase()
+                    const confidence = data.confidence ? `${(data.confidence * 100).toFixed(1)}%` : 'N/A'
+                    setDetectedLanguage(`${sourceLang} (${confidence})`)
+                    
+                    // Show service and processing info
+                    console.log(`Service: ${data.service_type || 'unknown'} | Processing: ${data.processing_time_ms || 0}ms`)
+                  }
+                  
+                  lastTranscriptionUpdate.current = now
                 }
               } else if (data.type === 'audio_chunk') {
                 // Handle real audio chunk information
@@ -140,11 +615,13 @@ export default function App() {
                 
                 console.log(`Audio chunk: ${audioData.size_bytes} bytes, Volume: ${audioMetrics.volume_percent.toFixed(1)}%`)
                 
-                // Update UI based on audio activity
-                if (audioMetrics.volume_percent > 10) {
+                // Throttle detected language updates to prevent frequent re-renders
+                const now = Date.now()
+                if (audioMetrics.volume_percent > 10 && (now - lastLanguageUpdate.current > LANGUAGE_UPDATE_THROTTLE)) {
                   // Some audio detected - update detected language with volume indicator
-                  const lang = sourceLanguage === 'auto' ? 'EN' : sourceLanguage.toUpperCase()
+                  const lang = sourceLanguage.toUpperCase()
                   setDetectedLanguage(`${lang} (${audioMetrics.volume_percent.toFixed(0)}%)`)
+                  lastLanguageUpdate.current = now
                 }
               } else if (data.type === 'audio_session_started') {
                 console.log('Audio session started:', data.config)
@@ -157,22 +634,36 @@ export default function App() {
                 const result = data.data
                 console.log('Transcription Result:', result)
                 
-                if (result.transcript && result.transcript.trim()) {
-                  setTranscription(result.transcript)
-                  
-                  // Show translation if available
-                  if (result.translation) {
-                    setTranslation(result.translation)
-                    console.log(`Translation (${result.language_detected} → ${targetLanguage}):`, result.translation)
+                // Throttle transcription result updates to prevent frequent re-renders
+                const now = Date.now()
+                if (now - lastTranscriptionUpdate.current > TRANSCRIPTION_UPDATE_THROTTLE) {
+                  if (result.transcript && result.transcript.trim()) {
+                    setTranscription(result.transcript)
+                    setConfidence(result.confidence ? result.confidence * 100 : 0)
+                    
+                    // Show translation if available
+                    if (result.translation && result.translation.text) {
+                      setTranslation(result.translation.text)
+                      setTranslationConfidence(85) // Default confidence for translation
+                      setWordsProcessed(result.transcript.split(' ').length)
+                      console.log(`Translation (${result.translation.source_language} → ${result.translation.target_language}):`, result.translation.text)
+                    } else {
+                      // Clear translation if not available
+                      setTranslation('')
+                      setTranslationConfidence(0)
+                      setWordsProcessed(result.transcript.split(' ').length)
+                    }
+                    
+                    // Update detected language
+                    const lang = result.language_detected || sourceLanguage
+                    const confidence = result.confidence ? `${(result.confidence * 100).toFixed(1)}%` : 'N/A'
+                    setDetectedLanguage(`${lang.toUpperCase()} (${confidence})`)
+                    
+                    // Show service and processing info
+                    console.log(`Service: ${result.service_type || 'unknown'} | Processing: ${result.processing_time_ms || 0}ms`)
                   }
                   
-                  // Update detected language
-                  const lang = result.language_detected || sourceLanguage
-                  const confidence = result.confidence ? `${(result.confidence * 100).toFixed(1)}%` : 'N/A'
-                  setDetectedLanguage(`${lang.toUpperCase()} (${confidence})`)
-                  
-                  // Show service and processing info
-                  console.log(`Service: ${result.service_type || 'unknown'} | Processing: ${result.processing_time_ms || 0}ms`)
+                  lastTranscriptionUpdate.current = now
                 }
                 
                 setIsTranscribing(false)
@@ -180,6 +671,15 @@ export default function App() {
                 console.error('Backend error:', data.message)
                 setIsListening(false)
                 alert(`Audio error: ${data.message}`)
+              } else if (data.type === 'language_config_updated') {
+                // Handle language configuration update confirmation
+                console.log('✅ Language configuration updated successfully:', data.config)
+                
+                // Update detected language display to show new configuration
+                const sourceLabel = languages.find(lang => lang.code === data.config.source_language)?.name || data.config.source_language
+                const targetLabel = languages.find(lang => lang.code === data.config.target_language)?.name || data.config.target_language
+                
+                console.log(`🌐 Language configuration: ${sourceLabel} → ${targetLabel}`)
               }
             } catch (error) {
               console.error('Error parsing audio message:', error)
@@ -199,7 +699,12 @@ export default function App() {
           
           dashboardWs.onmessage = (event) => {
             const data: AgentData = JSON.parse(event.data)
-            setAgentData(data)
+            // Throttle agent data updates to prevent frequent re-renders
+            const now = Date.now()
+            if (now - lastAgentUpdate.current > AGENT_UPDATE_THROTTLE) {
+              setAgentData(data)
+              lastAgentUpdate.current = now
+            }
           }
           
           setDashboardSocket(dashboardWs)
@@ -262,10 +767,17 @@ export default function App() {
               chunk_size: 1024,
               buffer_duration: 1.0,
               audio_source: audioSource,
-              source_language: sourceLanguage,
-              target_language: targetLanguage
+              source_language: sourceLanguage,  // Use current state
+              target_language: targetLanguage   // Use current state
             }
           }))
+          
+          console.log('📤 Sent start_capture with language config:', {
+            source_language: sourceLanguage,
+            target_language: targetLanguage,
+            audio_source: audioSource,
+            session_id: sessionId
+          })
         }
       } else {
         alert(`${audioSource === 'system' ? 'System audio' : 'Microphone'} permission is required for audio capture`)
@@ -359,33 +871,25 @@ export default function App() {
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="text-xs text-muted-foreground mb-1 block">From</label>
-                <Select value={sourceLanguage} onValueChange={setSourceLanguage}>
-                  <SelectTrigger className="h-8 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {languages.map((lang) => (
-                      <SelectItem key={lang.code} value={lang.code}>
-                        {lang.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <IsolatedLanguageSelect
+                  value={sourceLanguage}
+                  onValueChange={handleSourceLanguageChange}
+                  placeholder="Select source language"
+                  languages={languages}
+                  searchPlaceholder="Search source languages..."
+                  id="source-language-select"
+                />
               </div>
               <div>
                 <label className="text-xs text-muted-foreground mb-1 block">To</label>
-                <Select value={targetLanguage} onValueChange={setTargetLanguage}>
-                  <SelectTrigger className="h-8 text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {languages.filter(l => l.code !== 'auto').map((lang) => (
-                      <SelectItem key={lang.code} value={lang.code}>
-                        {lang.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <IsolatedLanguageSelect
+                  value={targetLanguage}
+                  onValueChange={handleTargetLanguageChange}
+                  placeholder="Select target language"
+                  languages={targetLanguages}
+                  searchPlaceholder="Search target languages..."
+                  id="target-language-select"
+                />
               </div>
             </div>
 

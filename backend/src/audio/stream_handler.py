@@ -34,21 +34,201 @@ class AudioStreamHandler:
         self.api_key = None
         self.audio_buffers: Dict[str, bytes] = {}
         self.buffer_durations: Dict[str, float] = {}
-        self.target_buffer_duration = 3.0  # Process every 3 seconds
+        self.silence_buffers: Dict[str, float] = {}  # Track silence duration
+        self.last_speech_time: Dict[str, float] = {}  # Track last speech activity
+        
+        # Enhanced buffer configuration for longer speech recognition
+        # Load from config if available, otherwise use defaults
+        try:
+            from ..config import settings  # Use the global settings instance with error handling
+            self.target_buffer_duration = settings.SPEECH_BUFFER_TARGET_DURATION
+            self.max_buffer_duration = settings.SPEECH_BUFFER_MAX_DURATION
+            self.min_buffer_duration = settings.SPEECH_BUFFER_MIN_DURATION
+            self.silence_threshold = settings.SPEECH_SILENCE_THRESHOLD
+            self.volume_threshold = settings.SPEECH_VOLUME_THRESHOLD
+        except Exception:
+            # Fallback defaults if config not available or fails to load
+            self.target_buffer_duration = 5.0  # Increased from 1.0 to 5.0 seconds for longer sentences
+            self.max_buffer_duration = 15.0    # Maximum buffer duration before forced processing
+            self.min_buffer_duration = 2.0     # Minimum buffer duration before processing
+            self.silence_threshold = 1.5       # Seconds of silence before processing buffer
+            self.volume_threshold = 20.0       # Minimum volume percentage to consider as speech
+        
         self.stats = {
             'total_sessions': 0,
             'active_sessions': 0,
             'total_audio_bytes': 0,
             'total_chunks_processed': 0,
             'total_transcriptions': 0,
-            'successful_transcriptions': 0
+            'successful_transcriptions': 0,
+            'sentences_detected': 0,
+            'silence_breaks': 0
         }
         self._main_loop = None
+        
+        # Language code mapping for Google Cloud Speech-to-Text
+        self._language_code_map = self._create_language_code_map()
         
         # Initialize Speech-to-Text client
         self._initialize_speech_client()
         
-        logger.info("Audio stream handler initialized with Speech-to-Text support")
+        logger.info("Audio stream handler initialized with enhanced Speech-to-Text support", 
+                   target_duration=self.target_buffer_duration,
+                   max_duration=self.max_buffer_duration,
+                   min_duration=self.min_buffer_duration,
+                   silence_threshold=self.silence_threshold,
+                   volume_threshold=self.volume_threshold)
+    
+    def update_speech_settings(self, **kwargs):
+        """Update speech recognition settings dynamically"""
+        if 'target_buffer_duration' in kwargs:
+            self.target_buffer_duration = kwargs['target_buffer_duration']
+        if 'max_buffer_duration' in kwargs:
+            self.max_buffer_duration = kwargs['max_buffer_duration'] 
+        if 'min_buffer_duration' in kwargs:
+            self.min_buffer_duration = kwargs['min_buffer_duration']
+        if 'silence_threshold' in kwargs:
+            self.silence_threshold = kwargs['silence_threshold']
+        if 'volume_threshold' in kwargs:
+            self.volume_threshold = kwargs['volume_threshold']
+            
+        logger.info("Speech recognition settings updated", 
+                   target_duration=self.target_buffer_duration,
+                   max_duration=self.max_buffer_duration,
+                   min_duration=self.min_buffer_duration,
+                   silence_threshold=self.silence_threshold,
+                   volume_threshold=self.volume_threshold)
+    
+    def get_speech_stats(self) -> Dict[str, Any]:
+        """Get comprehensive speech recognition statistics"""
+        return {
+            **self.stats,
+            'settings': {
+                'target_buffer_duration': self.target_buffer_duration,
+                'max_buffer_duration': self.max_buffer_duration,
+                'min_buffer_duration': self.min_buffer_duration,
+                'silence_threshold': self.silence_threshold,
+                'volume_threshold': self.volume_threshold
+            },
+            'success_rate': (
+                self.stats['successful_transcriptions'] / self.stats['total_transcriptions']
+                if self.stats['total_transcriptions'] > 0 else 0.0
+            )
+        }
+    
+    def _create_language_code_map(self) -> Dict[str, str]:
+        """Create mapping from UI language codes to Google Cloud Speech-to-Text language codes"""
+        return {
+            # Major languages with proper regional codes
+            'en': 'en-US',
+            'es': 'es-ES',
+            'fr': 'fr-FR', 
+            'de': 'de-DE',
+            'it': 'it-IT',
+            'pt': 'pt-BR',
+            'ru': 'ru-RU',
+            'ja': 'ja-JP',
+            'ko': 'ko-KR',
+            'zh': 'zh-CN',
+            'ar': 'ar-SA',
+            'hi': 'hi-IN',
+            'th': 'th-TH',
+            'vi': 'vi-VN',
+            'tr': 'tr-TR',
+            'pl': 'pl-PL',
+            'nl': 'nl-NL',
+            'sv': 'sv-SE',
+            'da': 'da-DK',
+            'no': 'nb-NO',
+            'fi': 'fi-FI',
+            'cs': 'cs-CZ',
+            'sk': 'sk-SK',
+            'hu': 'hu-HU',
+            'ro': 'ro-RO',
+            'bg': 'bg-BG',
+            'hr': 'hr-HR',
+            'sl': 'sl-SI',
+            'et': 'et-EE',
+            'lv': 'lv-LV',
+            'lt': 'lt-LT',
+            'uk': 'uk-UA',
+            'he': 'he-IL',
+            'fa': 'fa-IR',
+            'ur': 'ur-PK',
+            'bn': 'bn-BD',
+            'ta': 'ta-IN',
+            'te': 'te-IN',
+            'ml': 'ml-IN',
+            'kn': 'kn-IN',
+            'gu': 'gu-IN',
+            'pa': 'pa-IN',
+            'ne': 'ne-NP',
+            'si': 'si-LK',
+            'my': 'my-MM',
+            'km': 'km-KH',
+            'lo': 'lo-LA',
+            'ka': 'ka-GE',
+            'hy': 'hy-AM',
+            'az': 'az-AZ',
+            'kk': 'kk-KZ',
+            'ky': 'ky-KG',
+            'uz': 'uz-UZ',
+            'tg': 'tg-TJ',
+            'mn': 'mn-MN',
+            'is': 'is-IS',
+            'mt': 'mt-MT',
+            'eu': 'eu-ES',
+            'ca': 'ca-ES',
+            'gl': 'gl-ES',
+            'cy': 'cy-GB',
+            'ga': 'ga-IE',
+            'sw': 'sw-KE',
+            'zu': 'zu-ZA',
+            'af': 'af-ZA',
+            'am': 'am-ET',
+            'ig': 'ig-NG',
+            'ha': 'ha-NG',
+            'yo': 'yo-NG',
+            'so': 'so-SO',
+            'rw': 'rw-RW',
+            'lg': 'lg-UG',
+            'ln': 'ln-CD',
+            'mg': 'mg-MG',
+            'ny': 'ny-MW',
+            'sn': 'sn-ZW',
+            'st': 'st-ZA',
+            'tn': 'tn-ZA',
+            'ts': 'ts-ZA',
+            've': 've-ZA',
+            'xh': 'xh-ZA',
+            'ss': 'ss-ZA'
+        }
+    
+    def _get_speech_language_config(self, source_language: str) -> Dict[str, Any]:
+        """Get Google Cloud Speech-to-Text language configuration"""
+        try:
+            # Use specific language only (no auto-detection)
+            speech_language = self._language_code_map.get(source_language, 'en-US')
+            config = {
+                'language_code': speech_language,
+                'alternative_language_codes': [],  # No alternatives needed
+                'enable_language_detection': False
+            }
+            
+            logger.info("🎯 Using specific language for speech recognition", 
+                       ui_language=source_language, 
+                       speech_language=speech_language)
+            
+            return config
+            
+        except Exception as e:
+            logger.error("Error creating speech language config", error=str(e))
+            # Fallback to English
+            return {
+                'language_code': 'en-US',
+                'alternative_language_codes': [],
+                'enable_language_detection': False
+            }
     
     def _initialize_speech_client(self):
         """Initialize Google Cloud Speech-to-Text client"""
@@ -83,23 +263,38 @@ class AudioStreamHandler:
             self.use_rest_api = False
             self.google_client = None
     
-    async def _transcribe_with_rest_api(self, audio_data: bytes, language_code: str = "en-US"):
+    async def _transcribe_with_rest_api(self, audio_data: bytes, language_code: str = "en-US", alternative_languages: list = None):
         """Transcribe audio using REST API with API key"""
         try:
             # Encode audio data
             audio_base64 = base64.b64encode(audio_data).decode('utf-8')
             
+            # Prepare request configuration for longer speech recognition
+            config = {
+                "encoding": "LINEAR16",
+                "sampleRateHertz": 16000,
+                "languageCode": language_code,
+                "enableAutomaticPunctuation": True,
+                "enableWordTimeOffsets": True,
+                "enableWordConfidence": True,
+                "model": "latest_long",  # Best model for longer audio content
+                "useEnhanced": True,     # Use enhanced model for better accuracy
+                "maxAlternatives": 1,    # Focus on best result for speed
+                "profanityFilter": False # Don't filter content
+            }
+            
+            # Add alternative language codes for better detection
+            if alternative_languages and len(alternative_languages) > 0:
+                config["alternativeLanguageCodes"] = alternative_languages
+                logger.info("🌐 Added alternative languages for detection", 
+                           primary=language_code, 
+                           alternatives=alternative_languages[:5])  # Log first 5 for brevity
+            
             # Prepare request
             url = f"https://speech.googleapis.com/v1/speech:recognize?key={self.api_key}"
             
             payload = {
-                "config": {
-                    "encoding": "LINEAR16",
-                    "sampleRateHertz": 16000,
-                    "languageCode": language_code,
-                    "enableAutomaticPunctuation": True,
-                    "model": "latest_long"
-                },
+                "config": config,
                 "audio": {
                     "content": audio_base64
                 }
@@ -107,7 +302,8 @@ class AudioStreamHandler:
             
             logger.info("🔄 Making Speech-to-Text API request", 
                        audio_size=len(audio_data), 
-                       language=language_code)
+                       language=language_code,
+                       has_alternatives=bool(alternative_languages))
             
             response = requests.post(url, json=payload)
             
@@ -119,35 +315,105 @@ class AudioStreamHandler:
                 result = response.json()
                 logger.info("✅ Speech-to-Text API success", response_data=result)
                 
-                if 'results' in result and result['results']:
-                    transcript = result['results'][0]['alternatives'][0]['transcript']
-                    confidence = result['results'][0]['alternatives'][0].get('confidence', 0)
-                    
-                    logger.info("📝 Transcription result", 
-                               transcript=transcript,
-                               confidence=confidence)
-                    
-                    self.stats['successful_transcriptions'] += 1
-                    return transcript, confidence
+                if 'results' in result and len(result['results']) > 0:
+                    # Get the best alternative from the first result
+                    first_result = result['results'][0]
+                    if 'alternatives' in first_result and len(first_result['alternatives']) > 0:
+                        best_alternative = first_result['alternatives'][0]
+                        transcript = best_alternative.get('transcript', '')
+                        confidence = best_alternative.get('confidence', 0.0)
+                        
+                        # Try to extract detected language if available
+                        detected_language = language_code
+                        if 'languageCode' in first_result:
+                            detected_language = first_result['languageCode']
+                        
+                        logger.info("📝 Transcription successful", 
+                                   transcript=transcript,
+                                   confidence=confidence,
+                                   detected_language=detected_language)
+                        
+                        return transcript, confidence, detected_language
+                    else:
+                        logger.warning("⚠️ No alternatives found in result")
+                        return None, 0, language_code
                 else:
                     logger.info("🔇 No speech detected in audio")
-                    return None, 0
+                    return None, 0, language_code
             else:
                 logger.error("❌ Speech-to-Text API error", 
                            status_code=response.status_code,
                            error=response.text)
-                return None, 0
+                return None, 0, language_code
                 
         except Exception as e:
-            logger.error("❌ Speech-to-Text transcription error", error=str(e))
-            return None, 0
+            logger.error("❌ Speech-to-Text REST API error", error=str(e))
+            return None, 0, language_code
     
-    async def _transcribe_with_client(self, audio_data: bytes, language_code: str = "en-US"):
+    async def _translate_with_rest_api(
+        self, 
+        text: str, 
+        target_language: str,
+        source_language: str = None
+    ) -> Optional[Dict[str, Any]]:
+        """Translate text using Google Translate REST API"""
+        try:
+            # Prepare request
+            url = f"https://translation.googleapis.com/language/translate/v2?key={self.api_key}"
+            
+            payload = {
+                "q": text,
+                "target": target_language,
+                "format": "text"
+            }
+            
+            # Add source language if specified
+            if source_language:
+                payload["source"] = source_language
+            
+            logger.info("🔄 Making Translation API request", 
+                       text=text[:100] + "..." if len(text) > 100 else text,
+                       target_language=target_language,
+                       source_language=source_language)
+            
+            response = requests.post(url, json=payload)
+            
+            logger.info("📨 Translation API response", 
+                       status_code=response.status_code,
+                       response_size=len(response.text))
+            
+            if response.status_code == 200:
+                result = response.json()
+                logger.info("✅ Translation API success", response_data=result)
+                
+                if 'data' in result and 'translations' in result['data']:
+                    translation = result['data']['translations'][0]
+                    
+                    return {
+                        'translated_text': translation['translatedText'],
+                        'source_language': translation.get('detectedSourceLanguage', source_language),
+                        'target_language': target_language,
+                        'success': True
+                    }
+                else:
+                    logger.error("❌ Invalid translation response format", response=result)
+                    return None
+            else:
+                logger.error("❌ Translation API error", 
+                           status_code=response.status_code,
+                           error=response.text)
+                return None
+                
+        except Exception as e:
+            logger.error("❌ Translation REST API error", error=str(e))
+            return None
+
+    async def _transcribe_with_client(self, audio_data: bytes, language_code: str = "en-US", alternative_languages: list = None):
         """Transcribe audio using Google Cloud client library"""
         try:
             if self.google_client is None:
                 logger.error("Google Cloud client not initialized")
-                return None, 0
+                return None, 0, language_code
                 
             # Initialize client if not already done
             if not self.google_client.is_initialized:
@@ -156,25 +422,39 @@ class AudioStreamHandler:
             # Use the client to transcribe
             from google.cloud import speech
             
-            # Configure recognition
-            config = speech.RecognitionConfig(
-                encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
-                sample_rate_hertz=16000,
-                language_code=language_code,
-                enable_automatic_punctuation=True,
-                model="latest_long"
-            )
+            # Configure recognition with dynamic language support for longer audio
+            config_params = {
+                'encoding': speech.RecognitionConfig.AudioEncoding.LINEAR16,
+                'sample_rate_hertz': 16000,
+                'language_code': language_code,
+                'enable_automatic_punctuation': True,
+                'enable_word_time_offsets': True,
+                'enable_word_confidence': True,
+                'model': "latest_long",  # Best model for longer audio content
+                'use_enhanced': True,    # Use enhanced model for better accuracy
+                'max_alternatives': 1,   # Focus on best result for speed
+                'profanity_filter': False # Don't filter content
+            }
             
+            # Add alternative language codes for better detection
+            if alternative_languages and len(alternative_languages) > 0:
+                config_params['alternative_language_codes'] = alternative_languages
+                logger.info("🌐 Added alternative languages to client config", 
+                           primary=language_code, 
+                           alternatives=alternative_languages[:5])
+            
+            config = speech.RecognitionConfig(**config_params)
             audio = speech.RecognitionAudio(content=audio_data)
             
             logger.info("🔄 Making Speech-to-Text request via client", 
                        audio_size=len(audio_data), 
-                       language=language_code)
+                       language=language_code,
+                       has_alternatives=bool(alternative_languages))
             
             # Perform transcription
             if self.google_client.speech_client is None:
                 logger.error("Google Cloud speech client not initialized")
-                return None, 0
+                return None, 0, language_code
                 
             response = self.google_client.speech_client.recognize(config=config, audio=audio)
             
@@ -183,22 +463,33 @@ class AudioStreamHandler:
             
             if response.results:
                 result = response.results[0]
-                transcript = result.alternatives[0].transcript
-                confidence = result.alternatives[0].confidence
+                alternative = result.alternatives[0]
+                transcript = alternative.transcript
+                confidence = alternative.confidence
+                
+                # Try to get detected language from the result
+                detected_language = language_code  # Default to requested language
+                if hasattr(result, 'language_code') and result.language_code:
+                    detected_language = result.language_code
+                elif hasattr(result, 'language') and result.language:
+                    detected_language = result.language
                 
                 logger.info("📝 Transcription result", 
                            transcript=transcript,
-                           confidence=confidence)
+                           confidence=confidence,
+                           detected_language=detected_language)
                 
-                self.stats['successful_transcriptions'] += 1
-                return transcript, confidence
+                # Update stats for successful transcription
+                if transcript and transcript.strip():
+                    self.stats['successful_transcriptions'] += 1
+                return transcript, confidence, detected_language
             else:
                 logger.info("🔇 No speech detected in audio")
-                return None, 0
+                return None, 0, language_code
                 
         except Exception as e:
             logger.error("❌ Speech-to-Text transcription error", error=str(e))
-            return None, 0
+            return None, 0, language_code
 
     async def start_audio_session(
         self, 
@@ -240,6 +531,8 @@ class AudioStreamHandler:
             # Initialize audio buffer for this session
             self.audio_buffers[session_id] = b""
             self.buffer_durations[session_id] = 0.0
+            self.silence_buffers[session_id] = 0.0 # Initialize silence buffer
+            self.last_speech_time[session_id] = time.time() # Initialize last speech time
             
             # Create PyAudio capture instance
             capture = PyAudioCapture(
@@ -370,6 +663,10 @@ class AudioStreamHandler:
                 del self.audio_buffers[session_id]
             if session_id in self.buffer_durations:
                 del self.buffer_durations[session_id]
+            if session_id in self.silence_buffers:
+                del self.silence_buffers[session_id]
+            if session_id in self.last_speech_time:
+                del self.last_speech_time[session_id]
             
             # Get final stats
             session_duration = time.time() - metadata['started_at']
@@ -427,7 +724,6 @@ class AudioStreamHandler:
         """
         try:
             # Update session metadata
-            language_code = "en-US"  # Default
             if session_id in self.session_metadata:
                 metadata = self.session_metadata[session_id]
                 metadata['total_chunks'] += 1
@@ -435,65 +731,190 @@ class AudioStreamHandler:
                 
                 # Get language settings from config
                 config = metadata['config']
-                source_language = config.get('source_language', 'en')
+                source_language = config.get('source_language', 'en') # Changed default to 'en'
                 target_language = config.get('target_language', 'en')
                 
-                # Convert language codes for Google API
-                if source_language != 'auto':
-                    language_code = f"{source_language}-US" if source_language == 'en' else source_language
+                # Get dynamic speech language configuration
+                speech_config = self._get_speech_language_config(source_language)
+                language_code = speech_config['language_code']
+                alternative_languages = speech_config['alternative_language_codes']
+                
+                logger.info("🎤 Processing audio with language config", 
+                           session_id=session_id,
+                           source_language=source_language,
+                           speech_language_code=language_code,
+                           alternatives_count=len(alternative_languages),
+                           enable_detection=speech_config.get('enable_language_detection', False))
+            else:
+                # Fallback if session not found
+                language_code = 'en-US'
+                alternative_languages = []
+                source_language = 'en'
+                target_language = 'en'
+                logger.warning("Session metadata not found, using English fallback", session_id=session_id)
             
             # Add audio to buffer
             if session_id not in self.audio_buffers:
                 self.audio_buffers[session_id] = b""
                 self.buffer_durations[session_id] = 0.0
+                self.silence_buffers[session_id] = 0.0 # Initialize silence buffer
+                self.last_speech_time[session_id] = time.time() # Initialize last speech time
             
             self.audio_buffers[session_id] += audio_data
             self.buffer_durations[session_id] += len(audio_data) / (16000 * 2)  # 16kHz, 2 bytes per sample
             
-            # Process when we have enough audio
-            if self.buffer_durations[session_id] >= self.target_buffer_duration:
+            # Update silence buffer
+            current_silence_duration = self.silence_buffers[session_id]
+            if metrics.get('volume_percent', 0) < self.volume_threshold:
+                current_silence_duration += len(audio_data) / (16000 * 2) # Increment by chunk duration
+            else:
+                current_silence_duration = 0.0 # Reset if speech detected
+            
+            self.silence_buffers[session_id] = current_silence_duration
+            
+            # Enhanced processing conditions for better sentence detection
+            should_process = False
+            process_reason = ""
+            
+            if self.buffer_durations[session_id] >= self.max_buffer_duration:
+                should_process = True
+                process_reason = "max_duration_reached"
+                self.stats['sentences_detected'] += 1
+            elif (self.buffer_durations[session_id] >= self.min_buffer_duration and 
+                  self.silence_buffers[session_id] >= self.silence_threshold):
+                should_process = True
+                process_reason = "silence_break_detected"
+                self.stats['silence_breaks'] += 1
+            elif self.buffer_durations[session_id] >= self.target_buffer_duration:
+                should_process = True
+                process_reason = "target_duration_reached"
+                
+            if should_process:
                 logger.info("🎙️ Processing audio buffer for transcription", 
                            session_id=session_id,
                            buffer_duration=self.buffer_durations[session_id],
-                           buffer_size=len(self.audio_buffers[session_id]))
+                           buffer_size=len(self.audio_buffers[session_id]),
+                           silence_duration=self.silence_buffers[session_id],
+                           process_reason=process_reason)
                 
                 # Transcribe audio
-                self.stats['total_transcriptions'] += 1
                 
                 if self.use_rest_api and self.api_key:
-                    transcript, confidence = await self._transcribe_with_rest_api(
+                    transcript, confidence, detected_language = await self._transcribe_with_rest_api(
                         self.audio_buffers[session_id], 
-                        language_code
+                        language_code,
+                        alternative_languages
                     )
                 elif self.google_client:
-                    transcript, confidence = await self._transcribe_with_client(
+                    transcript, confidence, detected_language = await self._transcribe_with_client(
                         self.audio_buffers[session_id], 
-                        language_code
+                        language_code,
+                        alternative_languages
                     )
+                    
+                    # Update stats for successful transcription
+                    if transcript and transcript.strip():
+                        self.stats['successful_transcriptions'] += 1
                 else:
-                    logger.error("No Speech-to-Text client available")
-                    transcript, confidence = None, 0
+                    logger.warning("No transcription service available")
+                    transcript = None
+                    confidence = 0
+                    detected_language = language_code
+                
+                # Log transcription attempt
+                self.stats['total_transcriptions'] += 1
                 
                 # Send transcription result to client
                 if transcript and transcript.strip():
+                    # Prepare transcription result
+                    transcription_result = {
+                        'transcript': transcript,
+                        'confidence': confidence,
+                        'language_detected': detected_language.split('-')[0],
+                        'service_type': 'google_speech_to_text',
+                        'processing_time_ms': int(time.time() * 1000),
+                        'audio_duration_seconds': self.buffer_durations[session_id]
+                    }
+                    
+                    # Add translation if target language is different from source
+                    if session_id in self.session_metadata:
+                        config = self.session_metadata[session_id]['config']
+                        source_language = config.get('source_language', 'en')
+                        target_language = config.get('target_language', 'en')
+                        
+                        # Translate if needed
+                        if target_language != source_language:
+                            logger.info("🌐 Translating text", 
+                                       text=transcript,
+                                       source_lang=source_language,
+                                       target_lang=target_language)
+                            
+                            # DEBUG: Log the current session configuration
+                            logger.info("🔍 Current session language config", 
+                                       session_id=session_id,
+                                       config=config,
+                                       source_language=source_language,
+                                       target_language=target_language)
+                            
+                            try:
+                                # Translate using Google Cloud client
+                                if self.google_client:
+                                    translation_result = await self.google_client.translate_text(
+                                        transcript,
+                                        target_language=target_language,
+                                        source_language=source_language
+                                    )
+                                    
+                                    if translation_result.get('success'):
+                                        transcription_result['translation'] = {
+                                            'text': translation_result['translated_text'],
+                                            'source_language': translation_result['source_language'],
+                                            'target_language': translation_result['target_language'],
+                                            'service_type': 'google_cloud_translate'
+                                        }
+                                        logger.info("✅ Translation successful", 
+                                                   original=transcript,
+                                                   translated=translation_result['translated_text'])
+                                    else:
+                                        logger.error("❌ Translation failed", 
+                                                   error=translation_result.get('error', 'Unknown error'))
+                                elif self.use_rest_api and self.api_key:
+                                    # Use REST API for translation
+                                    translation_result = await self._translate_with_rest_api(
+                                        transcript, 
+                                        target_language,
+                                        source_language
+                                    )
+                                    
+                                    if translation_result:
+                                        transcription_result['translation'] = {
+                                            'text': translation_result['translated_text'],
+                                            'source_language': translation_result.get('source_language', source_language),
+                                            'target_language': target_language,
+                                            'service_type': 'google_translate_rest'
+                                        }
+                                        logger.info("✅ Translation successful (REST)", 
+                                                   original=transcript,
+                                                   translated=translation_result['translated_text'])
+                                    else:
+                                        logger.error("❌ Translation failed (REST)")
+                                        
+                            except Exception as e:
+                                logger.error("❌ Translation error", error=str(e))
+                    
+                    # Send result to client
                     await websocket_callback({
                         'type': 'transcription_result',
                         'session_id': session_id,
-                        'data': {
-                            'transcript': transcript,
-                            'confidence': confidence,
-                            'language_detected': language_code.split('-')[0],
-                            'service_type': 'google_speech_to_text',
-                            'processing_time_ms': int(time.time() * 1000),
-                            'audio_duration_seconds': self.buffer_durations[session_id]
-                        },
+                        'data': transcription_result,
                         'timestamp': time.time()
                     })
                     
                     logger.info("📝 Transcription sent to client", 
                                session_id=session_id,
                                transcript=transcript,
-                               confidence=confidence)
+                               confidence=confidence,
+                               has_translation=bool(transcription_result.get('translation')))
                 else:
                     logger.info("🔇 No speech detected in audio buffer", 
                                session_id=session_id)
@@ -501,6 +922,8 @@ class AudioStreamHandler:
                 # Reset buffer
                 self.audio_buffers[session_id] = b""
                 self.buffer_durations[session_id] = 0.0
+                self.silence_buffers[session_id] = 0.0 # Reset silence buffer
+                self.last_speech_time[session_id] = time.time() # Reset last speech time
             
             # Create message for WebSocket (for debugging/monitoring)
             message = {
@@ -680,6 +1103,79 @@ class AudioStreamHandler:
                 else:
                     return False
             
+            elif message_type == 'update_language_config':
+                # Update language configuration for active session
+                if session_id in self.session_metadata:
+                    language_config = message.get('language_config', {})
+                    if language_config:
+                        # Update the session configuration
+                        current_config = self.session_metadata[session_id]['config']
+                        current_config.update({
+                            'source_language': language_config.get('source_language', current_config.get('source_language', 'en')),
+                            'target_language': language_config.get('target_language', current_config.get('target_language', 'en'))
+                        })
+                        
+                        logger.info("Language configuration updated", 
+                                   session_id=session_id,
+                                   source_language=current_config['source_language'],
+                                   target_language=current_config['target_language'])
+                        
+                        # Send confirmation to client
+                        await websocket_callback({
+                            'type': 'language_config_updated',
+                            'session_id': session_id,
+                            'config': {
+                                'source_language': current_config['source_language'],
+                                'target_language': current_config['target_language']
+                            },
+                            'timestamp': time.time()
+                        })
+                        
+                        return True
+                    else:
+                        logger.warning("Invalid language config", session_id=session_id)
+                        return False
+                else:
+                    logger.warning("Session not found for language update", session_id=session_id)
+                    return False
+            
+            elif message_type == 'update_speech_settings':
+                # Handle dynamic speech recognition settings updates
+                settings_data = message.get('settings', {})
+                
+                # Update speech settings
+                self.update_speech_settings(**settings_data)
+                
+                # Send confirmation back to client
+                await websocket_callback({
+                    'type': 'speech_settings_updated',
+                    'session_id': session_id,
+                    'settings': {
+                        'target_buffer_duration': self.target_buffer_duration,
+                        'max_buffer_duration': self.max_buffer_duration,
+                        'min_buffer_duration': self.min_buffer_duration,
+                        'silence_threshold': self.silence_threshold,
+                        'volume_threshold': self.volume_threshold
+                    },
+                    'timestamp': time.time()
+                })
+                
+                return True
+            
+            elif message_type == 'get_speech_stats':
+                # Handle speech statistics request
+                stats = self.get_speech_stats()
+                
+                # Send stats back to client
+                await websocket_callback({
+                    'type': 'speech_stats_response',
+                    'session_id': session_id,
+                    'stats': stats,
+                    'timestamp': time.time()
+                })
+                
+                return True
+            
             else:
                 logger.warning("Unknown message type", 
                              message_type=message_type,
@@ -702,6 +1198,8 @@ class AudioStreamHandler:
         # Clear all buffers
         self.audio_buffers.clear()
         self.buffer_durations.clear()
+        self.silence_buffers.clear()
+        self.last_speech_time.clear()
         
         # Clean up Google Cloud client
         if self.google_client:

@@ -347,17 +347,46 @@ class PyAudioCapture:
         logger.info("Audio capture loop ended")
     
     def _calculate_audio_metrics(self, audio_data: bytes, timestamp: float) -> Dict[str, Any]:
-        """Calculate audio quality metrics"""
+        """Calculate audio quality metrics with proper 16-bit PCM volume calculation"""
         try:
             # Convert to numpy array for analysis
             audio_array = np.frombuffer(audio_data, dtype=np.int16)
             
-            # Calculate volume (RMS)
-            rms = np.sqrt(np.mean(audio_array.astype(np.float32) ** 2))
-            volume_db = 20 * np.log10(rms + 1e-6)  # Avoid log(0)
+            # Debug: Raw audio data analysis
+            audio_min = int(np.min(audio_array))
+            audio_max = int(np.max(audio_array))
+            audio_mean = float(np.mean(audio_array))
             
-            # Normalize volume to 0-100 scale
-            volume_normalized = max(0, min(100, (volume_db + 60) * 100 / 60))
+            # Calculate RMS (Root Mean Square)
+            rms_raw = np.sqrt(np.mean(audio_array.astype(np.float64) ** 2))
+            
+            # Normalize RMS to 16-bit range (0-32767)
+            rms_normalized = rms_raw / 32767.0
+            
+            # Calculate dBFS (decibels relative to full scale)
+            # Full scale (32767) = 0 dBFS, silence approaches -∞ dBFS
+            if rms_normalized > 0:
+                volume_dbfs = 20 * np.log10(rms_normalized)
+            else:
+                volume_dbfs = -60.0  # Silence floor
+            
+            # Convert dBFS to percentage (0-100%)
+            # Map dBFS range: -60 dB = 0%, 0 dB = 100%
+            # Use logarithmic scaling for more natural volume perception
+            volume_percent = max(0.0, min(100.0, (volume_dbfs + 60.0) * 100.0 / 60.0))
+            
+            # Alternative linear volume calculation for comparison
+            volume_linear = min(100.0, (rms_raw / 32767.0) * 100.0)
+            
+            # Peak detection for clipping detection
+            peak_amplitude = max(abs(audio_min), abs(audio_max))
+            is_clipping = peak_amplitude >= 32767 * 0.95  # 95% of max = potential clipping
+            
+            # Debug logging with detailed audio analysis
+            print(f"🎧 AUDIO DEBUG: Raw samples - Min: {audio_min}, Max: {audio_max}, Mean: {audio_mean:.1f}")
+            print(f"🎧 AUDIO DEBUG: RMS - Raw: {rms_raw:.1f}, Normalized: {rms_normalized:.4f}")
+            print(f"🎧 AUDIO DEBUG: Volume - dBFS: {volume_dbfs:.1f}, Percent: {volume_percent:.1f}%, Linear: {volume_linear:.1f}%")
+            print(f"🎧 AUDIO DEBUG: Peak: {peak_amplitude}, Clipping: {is_clipping}")
             
             return {
                 'timestamp': float(timestamp),
@@ -365,9 +394,16 @@ class PyAudioCapture:
                 'sample_rate': int(self.sample_rate),
                 'channels': int(self.channels),
                 'bytes': int(len(audio_data)),
-                'volume_db': float(volume_db),
-                'volume_percent': float(volume_normalized),
-                'rms': float(rms)
+                'volume_db': float(volume_dbfs),
+                'volume_percent': float(volume_percent),
+                'rms': float(rms_raw),
+                'rms_normalized': float(rms_normalized),
+                'volume_linear': float(volume_linear),
+                'peak_amplitude': int(peak_amplitude),
+                'is_clipping': bool(is_clipping),
+                'audio_min': audio_min,
+                'audio_max': audio_max,
+                'audio_mean': audio_mean
             }
             
         except Exception as e:
@@ -380,7 +416,14 @@ class PyAudioCapture:
                 'bytes': int(len(audio_data)),
                 'volume_db': -60.0,
                 'volume_percent': 0.0,
-                'rms': 0.0
+                'rms': 0.0,
+                'rms_normalized': 0.0,
+                'volume_linear': 0.0,
+                'peak_amplitude': 0,
+                'is_clipping': False,
+                'audio_min': 0,
+                'audio_max': 0,
+                'audio_mean': 0.0
             }
     
     def _get_device_info(self) -> Dict[str, Any]:
