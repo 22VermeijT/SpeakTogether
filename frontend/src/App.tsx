@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { cn } from '@/lib/utils'
-import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
@@ -452,7 +451,6 @@ export default function App() {
   const [isListening, setIsListening] = useState(false)
   const [isConnected, setIsConnected] = useState(false)
   const [isDarkMode, setIsDarkMode] = useState(false)
-  const [isTTSEnabled, setIsTTSEnabled] = useState(false)
   const [transcription, setTranscription] = useState('')
   const [translation, setTranslation] = useState('')
   const [confidence, setConfidence] = useState(0)
@@ -476,9 +474,9 @@ export default function App() {
   const lastLanguageUpdate = useRef<number>(0)
   const lastAgentUpdate = useRef<number>(0)
   const lastTranscriptionUpdate = useRef<number>(0)
-  const LANGUAGE_UPDATE_THROTTLE = 2000 // Only update every 2 seconds
-  const AGENT_UPDATE_THROTTLE = 1000 // Only update every 1 second
-  const TRANSCRIPTION_UPDATE_THROTTLE = 500 // Only update every 0.5 seconds
+  const LANGUAGE_UPDATE_THROTTLE = 425 // Reduced by 15%: 500ms → 425ms
+  const AGENT_UPDATE_THROTTLE = 85 // Reduced by 15%: 100ms → 85ms  
+  const TRANSCRIPTION_UPDATE_THROTTLE = 40 // Reduced by 15%: 50ms → 40ms (ultra fast!)
 
   // Memoize language change handlers to prevent unnecessary re-renders
   const handleSourceLanguageChange = useCallback((value: string) => {
@@ -653,31 +651,57 @@ export default function App() {
                 console.log('Audio session ended:', data.stats)
                 setIsListening(false)
               } else if (data.type === 'transcription_result') {
-                // Handle Google Cloud transcription results
+                // Handle Google Cloud transcription results and AI enhancements
                 const result = data.data
                 console.log('Transcription Result:', result)
                 
-                // Throttle transcription result updates to prevent frequent re-renders
+                // Check if this is an AI enhancement update
+                if (data.is_enhancement && result.translation) {
+                  console.log('🤖 Received AI-enhanced translation:', {
+                    enhanced: result.translation.text,
+                    service: result.translation.service_type,
+                    polisher_applied: result.translation.polisher_applied
+                  })
+                  
+                  // Update only the translation with the enhanced version
+                  setTranslation(result.translation.text)
+                  setTranslationConfidence(90) // Higher confidence for AI-enhanced
+                  
+                  // Update caption overlay with enhanced translation
+                  updateCaptionOverlay(result.transcript, result.translation.text, result.confidence ? result.confidence * 100 : 0)
+                  
+                  console.log(`🚀 Enhanced Translation: ${result.translation.text}`)
+                  return // Don't process as regular transcription result
+                }
+                
+                // Handle regular transcription results (instant polished)
                 const now = Date.now()
                 if (now - lastTranscriptionUpdate.current > TRANSCRIPTION_UPDATE_THROTTLE) {
                   if (result.transcript && result.transcript.trim()) {
                     setTranscription(result.transcript)
                     setConfidence(result.confidence ? result.confidence * 100 : 0)
                     
-                    // Update caption overlay for direct transcription results
-                    updateCaptionOverlay(result.transcript, result.translation?.text || '', result.confidence ? result.confidence * 100 : 0)
-                    
-                    // Show translation if available
+                    // Show translation if available (instant polished version)
                     if (result.translation && result.translation.text) {
                       setTranslation(result.translation.text)
-                      setTranslationConfidence(85) // Default confidence for translation
+                      
+                      // Set confidence based on polisher status
+                      const polisherApplied = result.translation.polisher_applied
+                      setTranslationConfidence(polisherApplied ? 85 : 75)
                       setWordsProcessed(result.transcript.split(' ').length)
-                      console.log(`Translation (${result.translation.source_language} → ${result.translation.target_language}):`, result.translation.text)
+                      
+                      console.log(`🔧 ${polisherApplied ? 'Polished' : 'Raw'} Translation (${result.translation.source_language} → ${result.translation.target_language}):`, result.translation.text)
+                      
+                      // Update caption overlay for direct transcription results
+                      updateCaptionOverlay(result.transcript, result.translation.text, result.confidence ? result.confidence * 100 : 0)
                     } else {
                       // Clear translation if not available
                       setTranslation('')
                       setTranslationConfidence(0)
                       setWordsProcessed(result.transcript.split(' ').length)
+                      
+                      // Update caption overlay with just original text
+                      updateCaptionOverlay(result.transcript, '', result.confidence ? result.confidence * 100 : 0)
                     }
                     
                     // Update detected language
@@ -685,8 +709,11 @@ export default function App() {
                     const confidence = result.confidence ? `${(result.confidence * 100).toFixed(1)}%` : 'N/A'
                     setDetectedLanguage(`${lang.toUpperCase()} (${confidence})`)
                     
-                    // Show service and processing info
-                    console.log(`Service: ${result.service_type || 'unknown'} | Processing: ${result.processing_time_ms || 0}ms`)
+                    // Show service and processing info with polisher status
+                    const serviceInfo = result.translation?.polisher_applied 
+                      ? `${result.service_type || 'unknown'} + Polisher` 
+                      : result.service_type || 'unknown'
+                    console.log(`Service: ${serviceInfo} | Processing: ${result.processing_time_ms || 0}ms`)
                   }
                   
                   lastTranscriptionUpdate.current = now
@@ -706,6 +733,35 @@ export default function App() {
                 const targetLabel = languages.find(lang => lang.code === data.config.target_language)?.name || data.config.target_language
                 
                 console.log(`🌐 Language configuration: ${sourceLabel} → ${targetLabel}`)
+              } else if (data.type === 'audio_source_status') {
+                // Handle audio source status updates
+                console.log('🔊 Audio source status:', data)
+                
+                if (data.status === 'fallback' && data.requested_source === 'system' && data.actual_source === 'microphone') {
+                  // System audio was requested but fell back to microphone
+                  console.warn('⚠️ System audio fallback:', data.message)
+                  
+                  // Show user-friendly notification
+                  const platform = navigator.platform.toLowerCase()
+                  let setupInstructions = ''
+                  
+                  if (platform.includes('mac')) {
+                    setupInstructions = 'Install BlackHole from https://github.com/ExistentialAudio/BlackHole to enable system audio capture.'
+                  } else if (platform.includes('win')) {
+                    setupInstructions = 'Enable "Stereo Mix" in Windows sound settings or install VB-Cable to enable system audio capture.'
+                  } else {
+                    setupInstructions = 'Configure PulseAudio monitor or ALSA loopback to enable system audio capture.'
+                  }
+                  
+                  alert(`System Audio Not Available\n\nSpeakTogether is using your microphone instead of system audio.\n\n${setupInstructions}`)
+                  
+                  // Update detected language to show the actual source
+                  setDetectedLanguage(`MICROPHONE (fallback from system audio)`)
+                } else if (data.status === 'success' && data.actual_source === 'system') {
+                  // System audio is working correctly
+                  console.log('✅ System audio active:', data.device_name)
+                  setDetectedLanguage(`SYSTEM AUDIO (${data.device_name})`)
+                }
               }
             } catch (error) {
               console.error('Error parsing audio message:', error)
@@ -1049,48 +1105,19 @@ export default function App() {
 
             {/* Floating Caption Overlay */}
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium">Floating Overlay</span>
-                <Badge variant="outline" className="text-xs">
-                  Netflix-style
-                </Badge>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  onClick={toggleCaptionOverlay}
-                  className={cn(
-                    "gap-2 transition-all",
-                    isCaptionOverlayEnabled ? "gradient-primary text-white" : ""
-                  )}
-                  variant={isCaptionOverlayEnabled ? "default" : "outline"}
-                  size="sm"
-                >
-                  {isCaptionOverlayEnabled ? <Monitor className="w-4 h-4" /> : <MonitorOff className="w-4 h-4" />}
-                  {isCaptionOverlayEnabled ? 'On' : 'Off'}
-                </Button>
-                {/* Debug button in development mode */}
-                {isDev && window.electronAPI?.forceShowCaptionWindow && (
-                  <Button
-                    onClick={debugForceShowWindow}
-                    variant="outline"
-                    size="sm"
-                    className="text-xs opacity-70 hover:opacity-100"
-                    title="Debug: Force show caption window"
-                  >
-                    🧪
-                  </Button>
+              <span className="text-sm font-medium">Floating Overlay</span>
+              <Button
+                onClick={toggleCaptionOverlay}
+                className={cn(
+                  "gap-2 transition-all",
+                  isCaptionOverlayEnabled ? "gradient-primary text-white" : ""
                 )}
-              </div>
-            </div>
-
-            {/* TTS Toggle */}
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-medium text-muted-foreground">Text-to-Speech</span>
-              <Switch
-                checked={isTTSEnabled}
-                onCheckedChange={setIsTTSEnabled}
-                disabled={true}
-              />
+                variant={isCaptionOverlayEnabled ? "default" : "outline"}
+                size="sm"
+              >
+                {isCaptionOverlayEnabled ? <Monitor className="w-4 h-4" /> : <MonitorOff className="w-4 h-4" />}
+                {isCaptionOverlayEnabled ? 'On' : 'Off'}
+              </Button>
             </div>
           </CardContent>
         </Card>

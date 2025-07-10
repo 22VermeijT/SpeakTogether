@@ -148,24 +148,79 @@ class PyAudioCapture:
             # Look for devices that support system audio capture
             # This is platform-specific implementation
             device_count = self.py_audio.get_device_count()
+            found_devices = []
             
             for i in range(device_count):
                 device_info = self.py_audio.get_device_info_by_index(i)
                 device_name = device_info['name'].lower()
                 
-                # Look for system audio devices (platform-specific)
-                if any(keyword in device_name for keyword in [
-                    'stereo mix', 'what u hear', 'loopback', 'system audio',
-                    'speaker', 'headphone', 'output'
-                ]):
-                    if device_info['maxInputChannels'] > 0:
-                        logger.info("Found system audio device", 
+                # Enhanced detection for various platforms
+                system_audio_keywords = [
+                    # Windows
+                    'stereo mix', 'what u hear', 'wave out mix', 'rec. playback',
+                    # macOS virtual devices
+                    'blackhole', 'soundflower', 'loopback', 'background music', 
+                    'screenflow', 'audio hijack',
+                    # Linux
+                    'monitor', 'pulse', 'alsa loopback',
+                    # Generic
+                    'system audio', 'virtual audio', 'audio router'
+                ]
+                
+                # Check if device supports input and matches system audio patterns
+                if device_info['maxInputChannels'] > 0:
+                    if any(keyword in device_name for keyword in system_audio_keywords):
+                        found_devices.append({
+                            'index': i,
+                            'name': device_info['name'],
+                            'channels': device_info['maxInputChannels']
+                        })
+                        logger.info("Found potential system audio device", 
                                    device=device_info['name'], 
-                                   index=i)
-                        return i
+                                   index=i,
+                                   channels=device_info['maxInputChannels'])
             
-            # Fallback to default input if no system audio device found
-            logger.warning("No system audio device found, using default input")
+            # If we found system audio devices, use the first one
+            if found_devices:
+                chosen_device = found_devices[0]
+                logger.info("Selected system audio device", 
+                           device=chosen_device['name'], 
+                           index=chosen_device['index'])
+                return chosen_device['index']
+            
+            # Enhanced fallback with platform-specific guidance
+            import platform
+            system = platform.system()
+            
+            if system == "Darwin":  # macOS
+                logger.warning(
+                    "🔊 System audio capture not available on macOS without virtual audio device. "
+                    "Install BlackHole (https://github.com/ExistentialAudio/BlackHole) "
+                    "or similar for system audio capture. Falling back to microphone."
+                )
+            elif system == "Windows":
+                logger.warning(
+                    "🔊 System audio capture not available. Enable 'Stereo Mix' in Windows "
+                    "sound settings or install VB-Cable. Falling back to microphone."
+                )
+            elif system == "Linux":
+                logger.warning(
+                    "🔊 System audio capture not available. Configure PulseAudio monitor "
+                    "or ALSA loopback. Falling back to microphone."
+                )
+            else:
+                logger.warning("🔊 System audio capture not available. Falling back to microphone.")
+            
+            # List available input devices for debugging
+            input_devices = []
+            for i in range(device_count):
+                device_info = self.py_audio.get_device_info_by_index(i)
+                if device_info['maxInputChannels'] > 0:
+                    input_devices.append(f"  [{i}] {device_info['name']}")
+            
+            logger.info("Available input devices:", devices="\n".join(input_devices))
+            
+            # Return default input device
             return self.py_audio.get_default_input_device_info()['index']
             
         except Exception as e:

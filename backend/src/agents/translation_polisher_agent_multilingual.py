@@ -62,6 +62,7 @@ class TranslationPolisherAgentMultilingual:
         # Multilingual instant rules
         self.instant_rules = {
             'english': [
+                # Basic verb corrections
                 ("I go to", "I go to the"),
                 ("She go", "She goes"),
                 ("He go", "He goes"),
@@ -75,6 +76,8 @@ class TranslationPolisherAgentMultilingual:
                 ("I are", "I am"),
                 ("He are", "He is"),
                 ("She are", "She is"),
+                
+                # Common contractions
                 (" dont ", " don't "),
                 (" cant ", " can't "),
                 (" wont ", " won't "),
@@ -82,6 +85,55 @@ class TranslationPolisherAgentMultilingual:
                 (" arent ", " aren't "),
                 (" wasnt ", " wasn't "),
                 (" werent ", " weren't "),
+                
+                # Dutch -> English common errors
+                ("my name is", "my name is"),
+                ("My name is", "My name is"),
+                ("Hallo", "Hello"),
+                ("hallo", "hello"),
+                ("mijn naam is", "my name is"),
+                ("Mijn naam is", "My name is"),
+                ("naam", "name"),
+                ("ik ben", "I am"),
+                ("Ik ben", "I am"),
+                
+                # More aggressive Dutch patterns
+                ("Hallo, mijn naam is", "Hello, my name is"),
+                ("hallo, mijn naam is", "hello, my name is"),
+                ("Hallo, my name", "Hello, my name"),
+                ("hallo, my name", "hello, my name"),
+                
+                # Mixed language patterns
+                ("Hallo, my", "Hello, my"),
+                ("hallo, my", "hello, my"),
+                
+                # Grammar improvements
+                ("I am go", "I am going"),
+                ("I was go", "I was going"),
+                ("have go", "have gone"),
+                ("has go", "has gone"),
+                ("am call", "am called"),
+                ("is call", "is called"),
+                ("are call", "are called"),
+                
+                # Article corrections
+                ("a apple", "an apple"),
+                ("a orange", "an orange"),
+                ("a elephant", "an elephant"),
+                ("a hour", "an hour"),
+                
+                # Pronunciation/translation fixes
+                ("me name", "my name"),
+                ("me is", "I am"),
+                ("me am", "I am"),
+                
+                # Capitalization (simple)
+                ("hello, my", "Hello, my"),
+                ("hi, my", "Hi, my"),
+                
+                # Missing articles
+                (" name is ", " name is "),
+                ("name is ", "my name is "),
             ],
             'spanish': [
                 ("yo va", "yo voy"),
@@ -318,18 +370,53 @@ class TranslationPolisherAgentMultilingual:
     
     def _apply_instant_rules(self, text: str, language: str) -> str:
         """Apply instant grammar rules for specific language"""
+        original_text = text
         result = text
+        
+        # DEBUG: Log input
+        logger.info("🔧 POLISHER: Starting rule application", 
+                   input_text=original_text,
+                   language=language,
+                   text_length=len(text))
         
         # Get rules for detected language, fallback to english
         rules = self.instant_rules.get(language, self.instant_rules['english'])
+        logger.info("🔧 POLISHER: Using rules", 
+                   language=language,
+                   rules_count=len(rules),
+                   available_languages=list(self.instant_rules.keys()))
         
-        # Apply first matching rule for speed
+        # Apply ALL matching rules (not just first)
+        applied_rules = []
         for old, new in rules:
-            if old in result.lower():
-                # Case-preserving replacement
-                if old.lower() in result.lower():
-                    result = result.replace(old, new, 1)
-                    break
+            # Case-insensitive search but preserve original case
+            if old.lower() in result.lower():
+                # Find the actual case in the text
+                old_index = result.lower().find(old.lower())
+                if old_index != -1:
+                    # Replace while preserving case context
+                    before = result[:old_index]
+                    after = result[old_index + len(old):]
+                    result = before + new + after
+                    applied_rules.append((old, new))
+                    logger.info("🎯 POLISHER: Applied rule", 
+                               rule_from=old,
+                               rule_to=new,
+                               before_text=original_text,
+                               after_text=result)
+        
+        # DEBUG: Log final result
+        if applied_rules:
+            logger.info("✨ POLISHER: Grammar corrections applied", 
+                       original=original_text,
+                       corrected=result,
+                       rules_applied=len(applied_rules),
+                       rules_list=applied_rules)
+        else:
+            logger.info("ℹ️ POLISHER: No grammar corrections needed", 
+                       text=original_text,
+                       language=language,
+                       rules_checked=len(rules))
         
         return result
     

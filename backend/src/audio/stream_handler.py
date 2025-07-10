@@ -15,6 +15,7 @@ import threading
 
 from .capture import PyAudioCapture
 from ..google_cloud_client import GoogleCloudClient
+from ..agents.translation_polisher_agent_multilingual import TranslationPolisherAgentMultilingual
 
 logger = structlog.get_logger()
 
@@ -46,13 +47,15 @@ class AudioStreamHandler:
             self.min_buffer_duration = settings.SPEECH_BUFFER_MIN_DURATION
             self.silence_threshold = settings.SPEECH_SILENCE_THRESHOLD
             self.volume_threshold = settings.SPEECH_VOLUME_THRESHOLD
-        except Exception:
-            # Fallback defaults if config not available or fails to load
-            self.target_buffer_duration = 5.0  # Increased from 1.0 to 5.0 seconds for longer sentences
-            self.max_buffer_duration = 15.0    # Maximum buffer duration before forced processing
-            self.min_buffer_duration = 2.0     # Minimum buffer duration before processing
-            self.silence_threshold = 1.5       # Seconds of silence before processing buffer
-            self.volume_threshold = 20.0       # Minimum volume percentage to consider as speech
+            logger.info("✅ Using speech recognition settings from config")
+        except Exception as e:
+            # PROPER fallback defaults that match config.py values
+            self.target_buffer_duration = 5.0   # Target buffer duration for processing
+            self.max_buffer_duration = 15.0     # Maximum buffer duration before forced processing
+            self.min_buffer_duration = 2.0      # Minimum buffer duration before processing
+            self.silence_threshold = 1.5        # Seconds of silence before processing
+            self.volume_threshold = 20.0        # Minimum volume percentage to consider as speech
+            logger.warning(f"⚠️ Failed to load config, using fallback defaults: {e}")
         
         self.stats = {
             'total_sessions': 0,
@@ -72,12 +75,35 @@ class AudioStreamHandler:
         # Initialize Speech-to-Text client
         self._initialize_speech_client()
         
+        # Initialize Translation Polisher Agent
+        self.translation_polisher = TranslationPolisherAgentMultilingual()
+        self._polisher_initialized = False
+        
+        # Initialize polisher immediately (don't wait)
+        import asyncio
+        try:
+            # Create a task to initialize the polisher early
+            asyncio.create_task(self._initialize_polisher_early())
+        except Exception as e:
+            logger.warning(f"Failed to create polisher initialization task: {e}")
+        
         logger.info("Audio stream handler initialized with enhanced Speech-to-Text support", 
                    target_duration=self.target_buffer_duration,
                    max_duration=self.max_buffer_duration,
                    min_duration=self.min_buffer_duration,
                    silence_threshold=self.silence_threshold,
                    volume_threshold=self.volume_threshold)
+    
+    async def _ensure_polisher_initialized(self):
+        """Ensure the translation polisher is initialized"""
+        if not self._polisher_initialized:
+            try:
+                await self.translation_polisher.initialize()
+                self._polisher_initialized = True
+                logger.info("Translation polisher initialized successfully")
+            except Exception as e:
+                logger.warning(f"Translation polisher initialization failed: {e}")
+                self._polisher_initialized = False
     
     def update_speech_settings(self, **kwargs):
         """Update speech recognition settings dynamically"""
@@ -528,6 +554,11 @@ class AudioStreamHandler:
             config = self._create_audio_config(audio_config)
             print(f"🎤 SESSION DEBUG: Created config: {config}")
             
+            # Check if system audio was requested and provide feedback
+            requested_source = audio_config.get('audio_source') if audio_config else 'microphone'
+            if requested_source == 'system':
+                logger.info("🔊 System audio capture requested - checking for virtual audio devices...")
+            
             # Initialize audio buffer for this session
             self.audio_buffers[session_id] = b""
             self.buffer_durations[session_id] = 0.0
@@ -544,50 +575,25 @@ class AudioStreamHandler:
                 device_index=config.get('device_index')
             )
             
-            # Set up callback for audio data with proper event loop handling
-            def audio_callback(audio_data: bytes, metrics: Dict[str, Any]):
-                print(f"🎤 CALLBACK DEBUG: Audio callback called! Data: {len(audio_data)} bytes, Volume: {metrics.get('volume_percent', 0):.1f}%")
-                # Use thread-safe approach for asyncio from PyAudio thread
-                try:
-                    # Validate inputs
-                    if not audio_data or not metrics:
-                        logger.warning("Invalid audio data or metrics in callback", 
-                                     session_id=session_id)
-                        print(f"🎤 CALLBACK DEBUG: Invalid audio data or metrics")
-                        return
-                    
-                    # Check if we have a valid event loop reference
-                    if self._main_loop and not self._main_loop.is_closed():
-                        # Schedule the coroutine on the main event loop from PyAudio thread
-                        try:
-                            future = asyncio.run_coroutine_threadsafe(
+            def create_audio_callback():
+                def audio_callback(audio_data: bytes, metrics: Dict[str, Any]):
+                    """Callback function for audio data - runs in capture thread"""
+                    # We need to schedule the async processing on the main event loop
+                    try:
+                        if self._main_loop and not self._main_loop.is_closed():
+                            asyncio.run_coroutine_threadsafe(
                                 self._handle_audio_data(session_id, audio_data, metrics, websocket_callback),
                                 self._main_loop
                             )
-                            # Don't wait for result to avoid blocking PyAudio thread
-                            logger.debug("Audio callback scheduled successfully", 
-                                       session_id=session_id,
-                                       thread=threading.current_thread().name,
-                                       audio_bytes=len(audio_data))
-                        except RuntimeError as e:
-                            if "cannot schedule" in str(e).lower():
-                                logger.error("Event loop closed, cannot schedule audio callback", 
-                                           session_id=session_id)
-                            else:
-                                logger.error("Runtime error in audio callback", 
-                                           session_id=session_id, 
-                                           error=str(e))
-                    else:
-                        logger.warning("Main event loop not available for audio callback", 
-                                     session_id=session_id,
-                                     loop_available=self._main_loop is not None,
-                                     loop_closed=self._main_loop.is_closed() if self._main_loop else "N/A")
-                except Exception as e:
-                    logger.error("Error scheduling audio callback", 
-                               session_id=session_id, 
-                               thread=threading.current_thread().name,
-                               error=str(e),
-                               error_type=type(e).__name__)
+                        else:
+                            print(f"⚠️ Warning: Main event loop not available for session {session_id}")
+                    except Exception as e:
+                        print(f"❌ Error scheduling audio processing: {e}")
+                        logger.error("Error in audio callback scheduling", session_id=session_id, error=str(e))
+                
+                return audio_callback
+            
+            audio_callback = create_audio_callback()
             
             capture.set_audio_callback(audio_callback)
             
@@ -597,14 +603,69 @@ class AudioStreamHandler:
                 print(f"🎤 SESSION DEBUG: PyAudio initialized successfully, starting capture...")
                 if await capture.start_capture():
                     print(f"🎤 SESSION DEBUG: PyAudio capture started successfully!")
+                    
+                    # Check if we got the requested audio source
+                    if requested_source == 'system' and config['audio_source'] == 'system':
+                        # Get the actual device being used
+                        device_info = capture.py_audio.get_device_info_by_index(capture.device_index)
+                        actual_device_name = device_info['name']
+                        
+                        # Check if it's actually a system audio device
+                        system_keywords = ['blackhole', 'soundflower', 'loopback', 'stereo mix', 'what u hear', 'multi-output']
+                        is_actual_system_audio = any(keyword in actual_device_name.lower() for keyword in system_keywords)
+                        
+                        if is_actual_system_audio:
+                            logger.info(f"✅ System audio capture active using: {actual_device_name}")
+                            await websocket_callback({
+                                'type': 'audio_source_status',
+                                'session_id': session_id,
+                                'requested_source': 'system',
+                                'actual_source': 'system',
+                                'device_name': actual_device_name,
+                                'status': 'success',
+                                'message': f'System audio capture active using {actual_device_name}',
+                                'timestamp': time.time()
+                            })
+                        else:
+                            logger.warning(f"⚠️ System audio requested but using microphone: {actual_device_name}")
+                            await websocket_callback({
+                                'type': 'audio_source_status',
+                                'session_id': session_id,
+                                'requested_source': 'system',
+                                'actual_source': 'microphone',
+                                'device_name': actual_device_name,
+                                'status': 'fallback',
+                                'message': 'System audio not available - using microphone instead. Install BlackHole (macOS) or enable Stereo Mix (Windows) for system audio capture.',
+                                'timestamp': time.time()
+                            })
+                    
                     # Store capture instance and metadata
                     self.active_captures[session_id] = capture
+                    
+                    # Check if there's existing language-only session config
+                    existing_metadata = self.session_metadata.get(session_id, {})
+                    existing_config = existing_metadata.get('config', {})
+                    
+                    # Preserve existing language settings if they exist
+                    if existing_config and existing_metadata.get('language_only'):
+                        # Merge existing language config with new audio config
+                        config.update({
+                            'source_language': existing_config.get('source_language', config.get('source_language', 'en')),
+                            'target_language': existing_config.get('target_language', config.get('target_language', 'en'))
+                        })
+                        logger.info("✅ Merged existing language config with audio session", 
+                                   session_id=session_id,
+                                   source_language=config['source_language'],
+                                   target_language=config['target_language'])
+                    
+                    # Create/update session metadata
                     self.session_metadata[session_id] = {
                         'started_at': time.time(),
                         'config': config,
                         'total_chunks': 0,
                         'total_bytes': 0,
-                        'websocket_callback': websocket_callback
+                        'websocket_callback': websocket_callback,
+                        'language_only': False  # This is now an active audio session
                     }
                     
                     # Update stats
@@ -631,9 +692,7 @@ class AudioStreamHandler:
             return False
             
         except Exception as e:
-            logger.error("Error starting audio session", 
-                        session_id=session_id, 
-                        error=str(e))
+            logger.error("Error starting audio session", session_id=session_id, error=str(e))
             return False
 
     async def stop_audio_session(self, session_id: str) -> bool:
@@ -857,7 +916,13 @@ class AudioStreamHandler:
                                        target_language=target_language)
                             
                             try:
-                                # Translate using Google Cloud client
+                                # Ensure translation polisher is initialized
+                                await self._ensure_polisher_initialized()
+                                
+                                raw_translation = None
+                                translation_service = None
+                                
+                                # Get raw translation using Google Cloud client
                                 if self.google_client:
                                     translation_result = await self.google_client.translate_text(
                                         transcript,
@@ -866,18 +931,15 @@ class AudioStreamHandler:
                                     )
                                     
                                     if translation_result.get('success'):
-                                        transcription_result['translation'] = {
-                                            'text': translation_result['translated_text'],
-                                            'source_language': translation_result['source_language'],
-                                            'target_language': translation_result['target_language'],
-                                            'service_type': 'google_cloud_translate'
-                                        }
-                                        logger.info("✅ Translation successful", 
+                                        raw_translation = translation_result['translated_text']
+                                        translation_service = 'google_cloud_translate'
+                                        logger.info("✅ Raw translation obtained (Google Cloud)", 
                                                    original=transcript,
-                                                   translated=translation_result['translated_text'])
+                                                   raw_translated=raw_translation)
                                     else:
                                         logger.error("❌ Translation failed", 
                                                    error=translation_result.get('error', 'Unknown error'))
+                                        
                                 elif self.use_rest_api and self.api_key:
                                     # Use REST API for translation
                                     translation_result = await self._translate_with_rest_api(
@@ -887,17 +949,129 @@ class AudioStreamHandler:
                                     )
                                     
                                     if translation_result:
-                                        transcription_result['translation'] = {
-                                            'text': translation_result['translated_text'],
-                                            'source_language': translation_result.get('source_language', source_language),
-                                            'target_language': target_language,
-                                            'service_type': 'google_translate_rest'
-                                        }
-                                        logger.info("✅ Translation successful (REST)", 
+                                        raw_translation = translation_result['translated_text']
+                                        translation_service = 'google_translate_rest'
+                                        logger.info("✅ Raw translation obtained (REST)", 
                                                    original=transcript,
-                                                   translated=translation_result['translated_text'])
+                                                   raw_translated=raw_translation)
                                     else:
                                         logger.error("❌ Translation failed (REST)")
+                                
+                                # Apply translation polishing if we have a raw translation
+                                if raw_translation and self._polisher_initialized:
+                                    logger.info("🔧 Applying translation polisher", 
+                                               raw_translation=raw_translation,
+                                               target_language=target_language)
+                                    
+                                    # DEBUG: Log polisher status
+                                    logger.info("🔍 POLISHER DEBUG", 
+                                               polisher_initialized=self._polisher_initialized,
+                                               raw_translation_length=len(raw_translation),
+                                               target_language=target_language)
+                                    
+                                    # Convert language code to full language name for polisher
+                                    language_map = {
+                                        'en': 'english',
+                                        'es': 'spanish', 
+                                        'fr': 'french',
+                                        'de': 'german',
+                                        'pt': 'portuguese',
+                                        'it': 'italian',
+                                        'nl': 'dutch'
+                                    }
+                                    polisher_language = language_map.get(target_language, 'english')
+                                    
+                                    logger.info("🌐 LANGUAGE MAPPING", 
+                                               original_code=target_language,
+                                               polisher_language=polisher_language,
+                                               available_languages=list(language_map.keys()))
+                                    
+                                    # Define AI enhancement callback for later improvements
+                                    async def ai_enhancement_callback(enhanced_translation: str):
+                                        """Send AI-enhanced translation to frontend"""
+                                        try:
+                                            logger.info("🤖 AI-enhanced translation ready", 
+                                                       original=raw_translation,
+                                                       enhanced=enhanced_translation)
+                                            
+                                            # Send enhanced translation update
+                                            enhanced_result = {
+                                                'transcript': transcript,
+                                                'confidence': confidence,
+                                                'language_detected': detected_language.split('-')[0],
+                                                'service_type': 'google_speech_to_text',
+                                                'processing_time_ms': int(time.time() * 1000),
+                                                'audio_duration_seconds': self.buffer_durations[session_id],
+                                                'translation': {
+                                                    'text': enhanced_translation,
+                                                    'source_language': source_language,
+                                                    'target_language': target_language,
+                                                    'service_type': translation_service + '_ai_enhanced',
+                                                    'polisher_applied': True,
+                                                    'enhancement_type': 'ai_enhanced'
+                                                }
+                                            }
+                                            
+                                            await websocket_callback({
+                                                'type': 'transcription_result',
+                                                'session_id': session_id,
+                                                'data': enhanced_result,
+                                                'timestamp': time.time(),
+                                                'is_enhancement': True
+                                            })
+                                            
+                                        except Exception as e:
+                                            logger.error("❌ AI enhancement callback error", error=str(e))
+                                    
+                                    # Apply instant polishing (0-5ms) with AI enhancement queued
+                                    # Use polisher_language instead of target_language
+                                    polished_translation = await self.translation_polisher.polish_translation(
+                                        raw_translation=raw_translation,
+                                        target_language=polisher_language,  # Fixed: use proper language name
+                                        ai_callback=ai_enhancement_callback
+                                    )
+                                    
+                                    logger.info("✨ Translation polished successfully", 
+                                               raw=raw_translation,
+                                               polished=polished_translation,
+                                               improvement_applied=polished_translation != raw_translation,
+                                               character_change=len(polished_translation) - len(raw_translation))
+                                    
+                                    # DEBUG: Log specific changes made
+                                    if polished_translation != raw_translation:
+                                        logger.info("🎯 GRAMMAR CORRECTION APPLIED", 
+                                                   before=raw_translation,
+                                                   after=polished_translation,
+                                                   language=polisher_language)
+                                    else:
+                                        logger.info("ℹ️ No grammar correction needed", 
+                                                   text=raw_translation,
+                                                   language=polisher_language)
+                                    
+                                    # Use polished translation for immediate response
+                                    transcription_result['translation'] = {
+                                        'text': polished_translation,
+                                        'source_language': source_language,
+                                        'target_language': target_language,
+                                        'service_type': translation_service + '_polished',
+                                        'polisher_applied': True,
+                                        'raw_translation': raw_translation  # Keep for reference
+                                    }
+                                    
+                                elif raw_translation:
+                                    # DEBUG: Log why polisher wasn't used
+                                    logger.warning("⚠️ Translation polisher not available", 
+                                                  polisher_initialized=self._polisher_initialized,
+                                                  raw_translation_present=bool(raw_translation))
+                                    transcription_result['translation'] = {
+                                        'text': raw_translation,
+                                        'source_language': source_language,
+                                        'target_language': target_language,
+                                        'service_type': translation_service,
+                                        'polisher_applied': False
+                                    }
+                                else:
+                                    logger.warning("⚠️ No raw translation to polish")
                                         
                             except Exception as e:
                                 logger.error("❌ Translation error", error=str(e))
@@ -1104,39 +1278,56 @@ class AudioStreamHandler:
                     return False
             
             elif message_type == 'update_language_config':
-                # Update language configuration for active session
-                if session_id in self.session_metadata:
-                    language_config = message.get('language_config', {})
-                    if language_config:
-                        # Update the session configuration
+                # Update language configuration (works with or without active session)
+                language_config = message.get('language_config', {})
+                if language_config:
+                    # Get source and target languages from the message
+                    source_language = language_config.get('source_language', 'en')
+                    target_language = language_config.get('target_language', 'en')
+                    
+                    # Store language preferences for the session (create if doesn't exist)
+                    if session_id not in self.session_metadata:
+                        # Create a placeholder session metadata to store language config
+                        self.session_metadata[session_id] = {
+                            'config': {
+                                'source_language': source_language,
+                                'target_language': target_language,
+                                'audio_source': 'microphone',  # default
+                                'sample_rate': 16000,
+                                'channels': 1
+                            },
+                            'language_only': True  # Flag to indicate this is language-only config
+                        }
+                        logger.info("Created language-only session config", 
+                                   session_id=session_id,
+                                   source_language=source_language,
+                                   target_language=target_language)
+                    else:
+                        # Update existing session configuration
                         current_config = self.session_metadata[session_id]['config']
                         current_config.update({
-                            'source_language': language_config.get('source_language', current_config.get('source_language', 'en')),
-                            'target_language': language_config.get('target_language', current_config.get('target_language', 'en'))
+                            'source_language': source_language,
+                            'target_language': target_language
                         })
-                        
-                        logger.info("Language configuration updated", 
+                        logger.info("Updated existing session language config", 
                                    session_id=session_id,
-                                   source_language=current_config['source_language'],
-                                   target_language=current_config['target_language'])
-                        
-                        # Send confirmation to client
-                        await websocket_callback({
-                            'type': 'language_config_updated',
-                            'session_id': session_id,
-                            'config': {
-                                'source_language': current_config['source_language'],
-                                'target_language': current_config['target_language']
-                            },
-                            'timestamp': time.time()
-                        })
-                        
-                        return True
-                    else:
-                        logger.warning("Invalid language config", session_id=session_id)
-                        return False
+                                   source_language=source_language,
+                                   target_language=target_language)
+                    
+                    # Send confirmation to client
+                    await websocket_callback({
+                        'type': 'language_config_updated',
+                        'session_id': session_id,
+                        'config': {
+                            'source_language': source_language,
+                            'target_language': target_language
+                        },
+                        'timestamp': time.time()
+                    })
+                    
+                    return True
                 else:
-                    logger.warning("Session not found for language update", session_id=session_id)
+                    logger.warning("Invalid language config - no language_config data", session_id=session_id)
                     return False
             
             elif message_type == 'update_speech_settings':
@@ -1206,3 +1397,42 @@ class AudioStreamHandler:
             await self.google_client.cleanup()
         
         logger.info("Audio stream handler cleanup completed") 
+
+    async def _initialize_polisher_early(self):
+        """Initialize the polisher early during startup"""
+        try:
+            await asyncio.sleep(0.1)  # Small delay to let the main init finish
+            await self.translation_polisher.initialize()
+            self._polisher_initialized = True
+            logger.info("✅ Translation polisher initialized early and ready!")
+            
+            # Test the polisher with a simple example
+            await self._test_polisher()
+            
+        except Exception as e:
+            logger.error(f"❌ Early polisher initialization failed: {e}")
+            self._polisher_initialized = False
+    
+    async def _test_polisher(self):
+        """Test the polisher with sample text to verify it's working"""
+        try:
+            test_texts = [
+                "Hello, my name is Rashawn",  # Should stay the same
+                "Hallo, my name is Rashawn", # Should fix "Hallo" -> "Hello"
+                "me name is John",          # Should fix "me name" -> "my name"
+                "I am go to the store",     # Should fix "I am go" -> "I am going"
+            ]
+            
+            for test_text in test_texts:
+                polished = await self.translation_polisher.polish_translation(
+                    raw_translation=test_text,
+                    target_language="english"
+                )
+                
+                logger.info("🧪 POLISHER TEST", 
+                           input=test_text,
+                           output=polished,
+                           changed=polished != test_text)
+                           
+        except Exception as e:
+            logger.error(f"❌ Polisher test failed: {e}") 
