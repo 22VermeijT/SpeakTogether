@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SpeakTogether Live Captions</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      margin: 0;
+      padding: 15px;
+      background: linear-gradient(45deg, #6A1B9A 0%, #E040FB 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Inter', 'SF Pro Display', '-apple-system', 'BlinkMacSystemFont',
+                   'Segoe UI', 'Helvetica Neue', 'Arial',
+                   'Noto Sans Devanagari', 'Noto Sans Arabic', 'Noto Sans', sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      cursor: grab;
+    }
+    
+    body:active {
+      cursor: grabbing;
+    }
+    
+    .caption-container {
+      background: rgba(0, 0, 0, 0.75);
+      border-radius: 10px;
+      padding: 20px 25px;
+      max-width: 95%;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+      backdrop-filter: blur(10px);
+      position: relative;
+      transition: background 0.2s ease, transform 0.1s ease;
+    }
+    
+    .caption-container:hover {
+      background: rgba(0, 0, 0, 0.8);
+      transform: scale(1.01);
+    }
+    
+    /* Resize indicator */
+    .caption-container::after {
+      content: '';
+      position: absolute;
+      bottom: 4px;
+      right: 4px;
+      width: 12px;
+      height: 12px;
+      background: linear-gradient(-45deg, transparent 30%, rgba(255,255,255,0.2) 30%, rgba(255,255,255,0.2) 70%, transparent 70%);
+      pointer-events: none;
+      border-radius: 2px;
+    }
+    
+    /* Original Text - Primary Display */
+    .original-text {
+      color: #FFFFFF;
+      font-size: 22px;
+      font-weight: 500;
+      line-height: 1.4;
+      margin-bottom: 8px;
+      text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+      direction: auto;
+      unicode-bidi: plaintext;
+      word-wrap: break-word;
+      hyphens: auto;
+    }
+    
+    /* Chevron Separator */
+    .chevron-separator {
+      color: #E040FB;
+      font-size: 18px;
+      margin: 8px 0;
+      opacity: 0.8;
+      font-weight: bold;
+      text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.6);
+      transition: opacity 0.3s ease, transform 0.2s ease;
+    }
+    
+    .chevron-separator.active {
+      opacity: 1.0;
+      transform: scale(1.1);
+    }
+    
+    /* Translated Text - Secondary Display */
+    .translated-text {
+      color: #F0F0F0;
+      font-size: 20px;
+      font-weight: 400;
+      line-height: 1.3;
+      margin-top: 8px;
+      text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.8);
+      direction: auto;
+      unicode-bidi: plaintext;
+      opacity: 0.95;
+      word-wrap: break-word;
+      hyphens: auto;
+    }
+    
+    /* Placeholder states */
+    .placeholder-text {
+      color: #CCCCCC;
+      font-style: italic;
+      opacity: 0.7;
+      transition: all 0.3s ease;
+    }
+    
+    /* Confidence indicator */
+    .confidence-indicator {
+      position: absolute;
+      top: 8px;
+      right: 12px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #4CAF50;
+      opacity: 0.8;
+      transition: all 0.3s ease;
+    }
+    
+    .confidence-indicator.low {
+      background: #FF9800;
+    }
+    
+    .confidence-indicator.very-low {
+      background: #F44336;
+    }
+    
+    /* Language indicators */
+    .language-tags {
+      position: absolute;
+      top: 8px;
+      left: 12px;
+      display: flex;
+      gap: 4px;
+    }
+    
+    .language-tag {
+      background: rgba(224, 64, 251, 0.3);
+      color: #FFFFFF;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    /* Responsive design for smaller windows */
+    @media (max-width: 700px) {
+      .caption-container {
+        padding: 15px 20px;
+      }
+      
+      .original-text {
+        font-size: 20px;
+      }
+      
+      .translated-text {
+        font-size: 18px;
+      }
+      
+      .chevron-separator {
+        font-size: 16px;
+        margin: 6px 0;
+      }
+    }
+    
+    @media (max-height: 150px) {
+      .caption-container {
+        padding: 10px 15px;
+      }
+      
+      .original-text {
+        font-size: 18px;
+        margin-bottom: 4px;
+      }
+      
+      .translated-text {
+        font-size: 16px;
+        margin-top: 4px;
+      }
+      
+      .chevron-separator {
+        font-size: 14px;
+        margin: 4px 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="caption-container">
+    <!-- Language indicators -->
+    <div class="language-tags">
+      <span class="language-tag" id="source-lang">EN</span>
+      <span class="language-tag" id="target-lang">ES</span>
+    </div>
+    
+    <!-- Confidence indicator -->
+    <div class="confidence-indicator" id="confidence-dot"></div>
+    
+    <!-- Original text display -->
+    <div class="original-text placeholder-text" id="original-text">
+      Ready for live captions...
+    </div>
+    
+    <!-- Chevron separator -->
+    <div class="chevron-separator" id="chevron">▼</div>
+    
+    <!-- Translated text display -->
+    <div class="translated-text placeholder-text" id="translated-text">
+      Translation will appear here...
+    </div>
+  </div>
+  
+  <script>
+    console.log('🎬 Caption window HTML loaded with bilingual layout');
+    
+    // Enhanced renderer for bilingual captions
+    const originalElement = document.getElementById('original-text');
+    const translatedElement = document.getElementById('translated-text');
+    const chevronElement = document.getElementById('chevron');
+    const confidenceElement = document.getElementById('confidence-dot');
+    const sourceLangElement = document.getElementById('source-lang');
+    const targetLangElement = document.getElementById('target-lang');
+    
+    // Store current state
+    let currentState = {
+      hasOriginal: false,
+      hasTranslation: false,
+      confidence: 0
+    };
+    
+    function updateConfidenceIndicator(confidence) {
+      if (!confidenceElement) return;
+      
+      if (confidence >= 0.8) {
+        confidenceElement.className = 'confidence-indicator';
+      } else if (confidence >= 0.6) {
+        confidenceElement.className = 'confidence-indicator low';
+      } else {
+        confidenceElement.className = 'confidence-indicator very-low';
+      }
+    }
+    
+    function updateLanguageTags(sourceLanguage, targetLanguage) {
+      if (sourceLangElement && sourceLanguage) {
+        sourceLangElement.textContent = sourceLanguage.toUpperCase().substring(0, 3);
+      }
+      if (targetLangElement && targetLanguage) {
+        targetLangElement.textContent = targetLanguage.toUpperCase().substring(0, 3);
+      }
+    }
+    
+    function updateChevronState() {
+      if (!chevronElement) return;
+      
+      if (currentState.hasOriginal && currentState.hasTranslation) {
+        chevronElement.classList.add('active');
+      } else {
+        chevronElement.classList.remove('active');
+      }
+    }
+    
+    // Global function for external updates
+    window.updateBilingualCaption = function(data) {
+      console.log('📝 Updating bilingual caption:', data);
+      
+      // ENHANCED DEBUGGING: Log detailed translation processing in caption window
+      console.log('🔍 CAPTION WINDOW TRANSLATION DEBUG:', {
+        'data_received': data,
+        'data.original': data.original,
+        'data.translation': data.translation,
+        'original_length': (data.original || '').length,
+        'translation_length': (data.translation || '').length,
+        'original_truthy': !!data.original,
+        'translation_truthy': !!data.translation,
+        'translation_equals_original': data.original === data.translation
+      });
+      
+      // Update original text
+      if (data.original && originalElement) {
+        originalElement.textContent = data.original;
+        originalElement.classList.remove('placeholder-text');
+        currentState.hasOriginal = true;
+        console.log('✅ Original text updated successfully');
+      }
+      
+      // Update translated text
+      if (data.translation && translatedElement) {
+        console.log('✅ Translation found, updating translated text:', data.translation);
+        translatedElement.textContent = data.translation;
+        translatedElement.classList.remove('placeholder-text');
+        currentState.hasTranslation = true;
+      } else if (data.original && translatedElement) {
+        // Show "Translating..." when we have original but no translation yet
+        console.log('⚠️ No translation, showing "Translating..." message');
+        translatedElement.textContent = 'Translating...';
+        translatedElement.classList.add('placeholder-text');
+        currentState.hasTranslation = false;
+      }
+      
+      // Update confidence
+      if (typeof data.confidence === 'number') {
+        currentState.confidence = data.confidence;
+        updateConfidenceIndicator(data.confidence);
+        
+        // Apply confidence-based opacity to original text
+        if (originalElement) {
+          originalElement.style.opacity = Math.max(0.7, data.confidence);
+        }
+      }
+      
+      // Update language tags
+      updateLanguageTags(data.sourceLanguage, data.targetLanguage);
+      
+      // Update chevron state
+      updateChevronState();
+    };
+    
+    // Initialize display
+    document.addEventListener('DOMContentLoaded', () => {
+      console.log('🎨 Bilingual caption layout initialized');
+      updateChevronState();
+      
+      // Connect with preload script's captionAPI
+      if (window.captionAPI) {
+        console.log('✅ captionAPI found, setting up IPC listener');
+        window.captionAPI.onCaptionUpdate((data) => {
+          console.log('📥 Received caption data from preload:', data);
+          window.updateBilingualCaption(data);
+        });
+      } else {
+        console.warn('⚠️ captionAPI not available - waiting for preload script');
+        
+        // Fallback: keep checking for captionAPI
+        const checkForAPI = setInterval(() => {
+          if (window.captionAPI) {
+            console.log('✅ captionAPI now available, setting up listener');
+            window.captionAPI.onCaptionUpdate((data) => {
+              console.log('📥 Received caption data from preload (delayed):', data);
+              window.updateBilingualCaption(data);
+            });
+            clearInterval(checkForAPI);
+          }
+        }, 100);
+        
+        // Stop checking after 5 seconds
+        setTimeout(() => {
+          clearInterval(checkForAPI);
+          console.error('❌ captionAPI never became available');
+        }, 5000);
+      }
+    });
+    
+    // Test function for console debugging
+    window.testCaptionDisplay = function() {
+      console.log('🧪 Testing caption display with sample data...');
+      const testData = {
+        original: "This is a test of the enhanced bilingual caption system!",
+        translation: "¡Esta es una prueba del sistema de subtítulos bilingües mejorado!",
+        confidence: 0.92,
+        sourceLanguage: "en",
+        targetLanguage: "es",
+        fromTranscription: true,
+        isRealTime: true,
+        timestamp: Date.now()
+      };
+      
+      window.updateBilingualCaption(testData);
+      console.log('✅ Test data sent to caption display');
+    };
+    
+    console.log('🎯 Debug: Call testCaptionDisplay() to test the display');
+  </script>
+</body>
+</html> 

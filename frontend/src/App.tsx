@@ -21,7 +21,9 @@ import {
   VolumeX,
   Activity,
   Settings,
-  ChevronDown
+  ChevronDown,
+  Monitor,
+  MonitorOff
 } from 'lucide-react'
 
 // Types for our application state
@@ -443,6 +445,9 @@ const SimpleLanguageSelect = React.memo(({
 })
 
 export default function App() {
+  // Development mode detection
+  const isDev = process.env.NODE_ENV === 'development' || !window.electronAPI
+
   // State management
   const [isListening, setIsListening] = useState(false)
   const [isConnected, setIsConnected] = useState(false)
@@ -461,6 +466,7 @@ export default function App() {
   const [targetLanguage, setTargetLanguage] = useState('en')
   const [processingTime, setProcessingTime] = useState('0ms')
   const [wordsProcessed, setWordsProcessed] = useState(0)
+  const [isCaptionOverlayEnabled, setIsCaptionOverlayEnabled] = useState(false)
 
   // WebSocket connections
   const [audioSocket, setAudioSocket] = useState<WebSocket | null>(null)
@@ -561,6 +567,17 @@ export default function App() {
         
         setSessionId(sessionId)
 
+        // Initialize caption overlay state
+        if (window.electronAPI?.isCaptionEnabled) {
+          try {
+            const captionEnabled = await window.electronAPI.isCaptionEnabled()
+            setIsCaptionOverlayEnabled(captionEnabled)
+            console.log('Caption overlay state initialized:', captionEnabled)
+          } catch (error) {
+            console.error('Failed to get caption overlay state:', error)
+          }
+        }
+
         if (backendUrl) {
           // Connect to audio stream WebSocket
           const audioWsUrl = `${backendUrl.replace('http', 'ws')}/ws/audio-stream/${sessionId}`
@@ -580,22 +597,28 @@ export default function App() {
                 // Throttle transcription updates to prevent frequent re-renders
                 const now = Date.now()
                 if (now - lastTranscriptionUpdate.current > TRANSCRIPTION_UPDATE_THROTTLE) {
-                  if (data.transcript && data.transcript.trim()) {
-                    setTranscription(data.transcript)
-                    setConfidence(data.confidence ? data.confidence * 100 : 0)
-                    
-                    // Show translation if available
-                    if (data.translation && data.translation.text) {
-                      setTranslation(data.translation.text)
-                      setTranslationConfidence(85) // Default confidence for translation
-                      setWordsProcessed(data.transcript.split(' ').length)
-                      console.log(`Translation (${data.translation.source_language} → ${data.translation.target_language}):`, data.translation.text)
-                    } else {
-                      // Clear translation if not available
-                      setTranslation('')
-                      setTranslationConfidence(0)
-                      setWordsProcessed(data.transcript.split(' ').length)
-                    }
+                                      if (data.transcript && data.transcript.trim()) {
+                      setTranscription(data.transcript)
+                      setConfidence(data.confidence ? data.confidence * 100 : 0)
+                      
+                      // Show translation if available
+                      if (data.translation && data.translation.text) {
+                        setTranslation(data.translation.text)
+                        setTranslationConfidence(85) // Default confidence for translation
+                        setWordsProcessed(data.transcript.split(' ').length)
+                        console.log(`Translation (${data.translation.source_language} → ${data.translation.target_language}):`, data.translation.text)
+                        
+                        // Update caption overlay
+                        updateCaptionOverlay(data.transcript, data.translation.text, data.confidence ? data.confidence * 100 : 0)
+                      } else {
+                        // Clear translation if not available
+                        setTranslation('')
+                        setTranslationConfidence(0)
+                        setWordsProcessed(data.transcript.split(' ').length)
+                        
+                        // Update caption overlay with just original text
+                        updateCaptionOverlay(data.transcript, '', data.confidence ? data.confidence * 100 : 0)
+                      }
                     
                     // Update detected language using selected source language
                     const sourceLang = sourceLanguage.toUpperCase()
@@ -640,6 +663,9 @@ export default function App() {
                   if (result.transcript && result.transcript.trim()) {
                     setTranscription(result.transcript)
                     setConfidence(result.confidence ? result.confidence * 100 : 0)
+                    
+                    // Update caption overlay for direct transcription results
+                    updateCaptionOverlay(result.transcript, result.translation?.text || '', result.confidence ? result.confidence * 100 : 0)
                     
                     // Show translation if available
                     if (result.translation && result.translation.text) {
@@ -785,6 +811,134 @@ export default function App() {
     }
   }
 
+  // Handle caption overlay toggle
+  const toggleCaptionOverlay = async () => {
+    console.log('🎮 toggleCaptionOverlay button clicked')
+    console.log('🎮 Current state:', isCaptionOverlayEnabled)
+    console.log('🎮 electronAPI available:', !!window.electronAPI)
+    
+    // First get debug state to understand current situation
+    if (window.electronAPI?.debugCaptionState) {
+      try {
+        const debugState = await window.electronAPI.debugCaptionState()
+        console.log('🔍 Current debug state:', debugState)
+      } catch (debugError) {
+        console.error('🔍 Failed to get debug state:', debugError)
+      }
+    }
+    
+    try {
+      const newState = !isCaptionOverlayEnabled
+      console.log('🎮 Attempting to set new state:', newState)
+      
+      if (!window.electronAPI?.toggleCaptionOverlay) {
+        console.error('🎮 toggleCaptionOverlay API not available')
+        alert('Caption overlay API not available. Please ensure you\'re running in Electron.')
+        return
+      }
+      
+      console.log('🎮 Calling electronAPI.toggleCaptionOverlay...')
+      const result = await window.electronAPI.toggleCaptionOverlay(newState)
+      console.log('🎮 Got result from main process:', result)
+      
+      if (result?.success) {
+        setIsCaptionOverlayEnabled(newState)
+        console.log('✅ Caption overlay toggled successfully:', newState)
+        
+        // Log final state for debugging
+        if (result.state) {
+          console.log('📊 Final window state:', result.state)
+          
+          // Show success message with details
+          if (newState && result.state.windowVisible) {
+            console.log('🎉 Caption window should now be visible on screen!')
+          } else if (newState && !result.state.windowVisible) {
+            console.warn('⚠️ Caption window created but not visible - check always-on-top settings')
+          }
+        }
+        
+      } else {
+        console.error('❌ Failed to toggle caption overlay:', result?.error)
+        console.error('❌ Error stack:', result?.stack)
+        
+        // Enhanced error reporting
+        let errorMessage = `Failed to toggle caption overlay: ${result?.error || 'Unknown error'}`
+        if (result?.stack) {
+          errorMessage += '\n\nTechnical details logged to console.'
+        }
+        alert(errorMessage)
+      }
+    } catch (error) {
+      console.error('❌ Critical error toggling caption overlay:', error)
+      alert('Failed to toggle caption overlay. This feature requires Electron.')
+    }
+  }
+
+  // Debug function to force show window (for testing)
+  const debugForceShowWindow = async () => {
+    if (!window.electronAPI?.forceShowCaptionWindow) {
+      alert('Debug API not available')
+      return
+    }
+    
+    try {
+      console.log('🧪 Forcing caption window to show...')
+      const result = await window.electronAPI.forceShowCaptionWindow()
+      console.log('🧪 Force show result:', result)
+      
+      if (result) {
+        alert('Caption window forced to show. Check if it\'s visible on screen.')
+      } else {
+        alert('Failed to force show caption window. Check console for details.')
+      }
+    } catch (error) {
+      console.error('🧪 Error forcing show:', error)
+      alert('Error forcing caption window to show.')
+    }
+  }
+
+  // Send caption data to overlay window
+  const updateCaptionOverlay = useCallback((original: string, translated: string, confidence: number) => {
+    console.log('📤 updateCaptionOverlay called:', { 
+      original, 
+      translated, 
+      confidence, 
+      isCaptionOverlayEnabled,
+      hasElectronAPI: !!window.electronAPI?.updateCaptionText
+    });
+    
+    // ENHANCED DEBUGGING: Log detailed translation info
+    console.log('🔍 TRANSLATION DEBUG:', {
+      'translated_param': translated,
+      'translated_length': translated?.length || 0,
+      'translated_type': typeof translated,
+      'translated_truthy': !!translated,
+      'original_vs_translated': original === translated ? 'SAME' : 'DIFFERENT'
+    });
+    
+    if (window.electronAPI?.updateCaptionText) {
+      console.log('📤 Sending real transcription to caption overlay:', { original, translated, confidence });
+      
+      // Always send real transcription data to caption window (even if overlay appears disabled)
+      // The caption window itself will handle whether to display it
+      window.electronAPI.updateCaptionText({
+        original,
+        translation: translated || '',  // Fixed: use 'translation' property name and remove restrictive condition
+        confidence,
+        fromTranscription: true, // Mark as real transcription data
+        timestamp: Date.now(),
+        language: sourceLanguage || 'en', // Include language for font selection
+        isRealTime: true // Flag to force override test mode
+      }).then(result => {
+        console.log('✅ Caption update result:', result);
+      }).catch(error => {
+        console.error('❌ Caption update failed:', error);
+      });
+    } else {
+      console.warn('⚠️ electronAPI.updateCaptionText not available');
+    }
+  }, [isCaptionOverlayEnabled, sourceLanguage])
+
   const getAgentStatusColor = (status: string) => {
     switch (status) {
       case 'active': return 'bg-green-500'
@@ -890,6 +1044,42 @@ export default function App() {
                   searchPlaceholder="Search target languages..."
                   id="target-language-select"
                 />
+              </div>
+            </div>
+
+            {/* Floating Caption Overlay */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">Floating Overlay</span>
+                <Badge variant="outline" className="text-xs">
+                  Netflix-style
+                </Badge>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  onClick={toggleCaptionOverlay}
+                  className={cn(
+                    "gap-2 transition-all",
+                    isCaptionOverlayEnabled ? "gradient-primary text-white" : ""
+                  )}
+                  variant={isCaptionOverlayEnabled ? "default" : "outline"}
+                  size="sm"
+                >
+                  {isCaptionOverlayEnabled ? <Monitor className="w-4 h-4" /> : <MonitorOff className="w-4 h-4" />}
+                  {isCaptionOverlayEnabled ? 'On' : 'Off'}
+                </Button>
+                {/* Debug button in development mode */}
+                {isDev && window.electronAPI?.forceShowCaptionWindow && (
+                  <Button
+                    onClick={debugForceShowWindow}
+                    variant="outline"
+                    size="sm"
+                    className="text-xs opacity-70 hover:opacity-100"
+                    title="Debug: Force show caption window"
+                  >
+                    🧪
+                  </Button>
+                )}
               </div>
             </div>
 
@@ -1025,6 +1215,23 @@ declare global {
       requestAudioPermission: () => Promise<{ granted: boolean; type: string }>
       openDashboard: () => Promise<void>
       getAppInfo: () => Promise<any>
+      
+      // Caption overlay controls
+      toggleCaptionOverlay: (enabled: boolean) => Promise<{ success: boolean; enabled?: boolean; error?: string; state?: any }>
+      updateCaptionText: (data: { 
+        original: string; 
+        translation: string; // Fixed: changed from 'translated' to 'translation'
+        confidence: number;
+        fromTranscription?: boolean;
+        timestamp?: number;
+        language?: string; // Added for font selection
+        isRealTime?: boolean; // Added for force override
+      }) => Promise<{ success: boolean; error?: string }>
+      isCaptionEnabled: () => Promise<boolean>
+      
+      // Debugging and testing
+      debugCaptionState: () => Promise<any>
+      forceShowCaptionWindow: () => Promise<boolean>
     }
   }
 } 

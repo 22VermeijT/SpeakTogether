@@ -19,6 +19,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openDashboard: () => ipcRenderer.invoke('open-dashboard'),
     minimizeToTray: () => ipcRenderer.invoke('minimize-to-tray'),
 
+    // Caption overlay controls
+    toggleCaptionOverlay: (enabled) => ipcRenderer.invoke('toggle-caption-overlay', enabled),
+    updateCaptionText: (data) => ipcRenderer.invoke('update-caption-text', data),
+    isCaptionEnabled: () => ipcRenderer.invoke('is-caption-enabled'),
+    
+    // Debugging and testing
+    debugCaptionState: () => ipcRenderer.invoke('debug-caption-state'),
+    forceShowCaptionWindow: () => ipcRenderer.invoke('force-show-caption-window'),
+    testCaptionData: () => ipcRenderer.invoke('test-caption-data'),
+
     // IPC listeners for menu actions
     onStartAudioCapture: (callback) => {
         ipcRenderer.on('start-audio-capture', callback);
