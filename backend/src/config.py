@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     ADK_API_KEY: str = ""
     ADK_PROJECT_ID: str = ""
     
+    # Gemini API Configuration
+    GEMINI_API_KEY: str = ""
+    
     # WebSocket Configuration
     WS_MAX_CONNECTIONS: int = 100
     WS_PING_INTERVAL: int = 30
